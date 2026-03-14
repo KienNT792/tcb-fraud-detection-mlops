@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/Asus/Desktop/tcb-fraud-detection-mlops/ml_pipeline/mlruns/0/ccaea0ff102946d1a27a14742c435395/artifacts
+end_time: 1773420767910
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: ccaea0ff102946d1a27a14742c435395
+run_name: grandiose-grouse-47
+run_uuid: ccaea0ff102946d1a27a14742c435395
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1773420762366
+status: 3
+tags: []
+user_id: Asus
