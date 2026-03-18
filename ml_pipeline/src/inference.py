@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,8 @@ import joblib
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
+
+from infrastructure.pipeline import PIPELINE_CONFIG
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -131,6 +134,7 @@ class FraudDetector:
         self._models_dir    = Path(models_dir)
         self._processed_dir = Path(processed_dir)
         self._loaded_at     = datetime.now(tz=timezone.utc).isoformat()
+        self._model_version = self._resolve_model_version()
 
         logger.info("Loading FraudDetector artifacts…")
         self._model, self._feature_state, self._feature_cols, self._threshold = (
@@ -168,6 +172,7 @@ class FraudDetector:
         is_fraud     = fraud_score >= self._threshold
         risk_level   = self._risk_level(fraud_score)
         tx_id        = str(transaction.get("transaction_id", "UNKNOWN"))
+        predicted_at = datetime.now(tz=timezone.utc).isoformat()
 
         result: dict[str, Any] = {
             "transaction_id": tx_id,
@@ -175,6 +180,8 @@ class FraudDetector:
             "is_fraud_pred":  is_fraud,
             "threshold":      self._threshold,
             "risk_level":     risk_level,
+            "model_version":  self._model_version,
+            "prediction_timestamp": predicted_at,
         }
 
         logger.info(
@@ -205,6 +212,8 @@ class FraudDetector:
         result["fraud_score"]   = np.round(scores, 6)
         result["is_fraud_pred"] = (scores >= self._threshold).astype(int)
         result["risk_level"]    = [self._risk_level(s) for s in scores]
+        result["model_version"] = self._model_version
+        result["prediction_timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
         n_fraud = int((result["is_fraud_pred"] == 1).sum())
         logger.info(
@@ -230,6 +239,7 @@ class FraudDetector:
             "features":      self._feature_cols,
             "model_type":    type(self._model).__name__,
             "best_iteration": int(self._model.best_iteration),
+            "model_version": self._model_version,
         }
         logger.info(
             "health_check — status=%s | features=%d | threshold=%.4f",
@@ -242,6 +252,25 @@ class FraudDetector:
     # ------------------------------------------------------------------
     # Internal — artifact loading
     # ------------------------------------------------------------------
+
+    def _resolve_model_version(self) -> str:
+        env_version = os.getenv("MODEL_VERSION")
+        if env_version:
+            return env_version
+
+        candidates = [
+            self._models_dir / "registry_info.json",
+            self._models_dir / "training_run.json",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                with open(candidate, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                version = data.get("model_version") or data.get("run_id")
+                if version:
+                    return str(version)
+
+        return "unknown"
 
     def _load_artifacts(
         self,
@@ -582,7 +611,7 @@ def _smoke_test(models_dir: str, processed_dir: str) -> None:
 
 
 if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent.parent
-    _models    = str(project_root / "models")
-    _processed = str(project_root / "data" / "processed")
-    _smoke_test(_models, _processed)
+    _smoke_test(
+        str(PIPELINE_CONFIG.paths.models_dir),
+        str(PIPELINE_CONFIG.paths.processed_dir),
+    )

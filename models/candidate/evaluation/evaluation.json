@@ -1,0 +1,48 @@
+{
+  "evaluated_at": "2026-03-14T05:11:22.579449+00:00",
+  "threshold_metrics": {
+    "threshold": 0.6788,
+    "precision": 0.982548,
+    "recall": 1.0,
+    "f1": 0.991197,
+    "pr_auc": 0.999876,
+    "roc_auc": 0.999996,
+    "confusion_matrix": [
+      [
+        19427,
+        10
+      ],
+      [
+        0,
+        563
+      ]
+    ]
+  },
+  "baseline_comparison": {
+    "status": "PASS",
+    "metrics": {
+      "pr_auc": {
+        "baseline": 0.999876,
+        "current": 0.999876,
+        "delta": 0.0,
+        "tolerance": 0.02,
+        "status": "PASS"
+      },
+      "f1": {
+        "baseline": 0.991197,
+        "current": 0.991197,
+        "delta": 0.0,
+        "tolerance": 0.03,
+        "status": "PASS"
+      },
+      "recall": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "tolerance": 0.02,
+        "status": "PASS"
+      }
+    }
+  },
+  "overall_status": "PASS"
+}

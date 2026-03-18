@@ -5,3 +5,9 @@ data/
 artifacts/
 .mlflow/
 .env
+.pytest_cache/
+.ruff_cache/
+*.log
+airflow_home/
+grafana-data/
+prometheus-data/

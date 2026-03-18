@@ -134,6 +134,15 @@ class PredictionResponse(BaseModel):
     is_fraud_pred:  bool  = Field(..., description="True if fraud_score >= threshold")
     threshold:      float = Field(..., description="Decision threshold used")
     risk_level:     str   = Field(..., description="LOW | MEDIUM | HIGH")
+    model_version:  str   = Field(..., description="Model version or registry version in use")
+    prediction_timestamp: str = Field(..., description="UTC timestamp when inference was generated")
+    served_by: str = Field(..., description="stable | candidate")
+    rollout_candidate_percent: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="Configured traffic percentage routed to the candidate model",
+    )
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -142,8 +151,12 @@ class PredictionResponse(BaseModel):
             "is_fraud_pred":  False,
             "threshold":      0.6788,
             "risk_level":     "LOW",
+            "model_version":  "7",
+            "prediction_timestamp": "2026-03-14T10:23:01+00:00",
+            "served_by": "stable",
+            "rollout_candidate_percent": 10,
         }
-    }}
+    }, "protected_namespaces": ()}
 
 
 class BatchPredictionItem(BaseModel):
@@ -152,7 +165,13 @@ class BatchPredictionItem(BaseModel):
     transaction_id: str
     fraud_score:    float
     is_fraud_pred:  bool
+    threshold:      float
     risk_level:     str
+    model_version:  str
+    prediction_timestamp: str
+    served_by:      str
+
+    model_config = {"protected_namespaces": ()}
 
 
 class BatchPredictionResponse(BaseModel):
@@ -161,8 +180,22 @@ class BatchPredictionResponse(BaseModel):
     total:          int                     = Field(..., description="Total transactions scored")
     fraud_detected: int                     = Field(..., description="Number predicted as fraud")
     fraud_rate:     float                   = Field(..., description="Fraction predicted as fraud")
-    threshold:      float                   = Field(..., description="Decision threshold used")
+    threshold:      Optional[float]         = Field(
+        ...,
+        description="Decision threshold when a single model served the batch; null for mixed rollout batches",
+    )
+    model_version:  str                     = Field(
+        ...,
+        description="Model version in use, or 'mixed' when rollout routes to multiple models",
+    )
+    prediction_timestamp: str               = Field(..., description="UTC timestamp for the batch response")
+    rollout_candidate_percent: int          = Field(..., ge=0, le=100)
+    traffic_distribution: dict[str, int]    = Field(
+        ...,
+        description="Number of transactions served by stable and candidate models",
+    )
     predictions:    list[BatchPredictionItem]
+    model_config = {"protected_namespaces": ()}
 
 
 class HealthResponse(BaseModel):
@@ -175,6 +208,7 @@ class HealthResponse(BaseModel):
     best_iteration:  int
     loaded_at:       str
     api_version:     str
+    model_version:   str
     model_config = {"protected_namespaces": ()}
 
 class ErrorResponse(BaseModel):
@@ -183,3 +217,45 @@ class ErrorResponse(BaseModel):
     error:   str
     detail:  Any  = None
     status_code: int
+
+
+class ProbeResponse(BaseModel):
+    status: str
+    api_version: str
+
+
+class RolloutModelInfo(BaseModel):
+    models_dir: str
+    processed_dir: str
+    model_version: Optional[str] = None
+    loaded: bool
+
+    model_config = {"protected_namespaces": ()}
+
+
+class RolloutStatusResponse(BaseModel):
+    config_path: str
+    enabled: bool
+    status: str
+    traffic_percent_candidate: int = Field(..., ge=0, le=100)
+    rollout_steps: list[int]
+    current_step_index: int
+    step_interval_minutes: int
+    auto_advance: bool
+    auto_promote_when_complete: bool
+    last_transition_at: Optional[str] = None
+    next_step_at: Optional[str] = None
+    stable: RolloutModelInfo
+    candidate: Optional[RolloutModelInfo] = None
+
+
+class RolloutConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    traffic_percent_candidate: Optional[int] = Field(None, ge=0, le=100)
+    rollout_steps: Optional[list[int]] = Field(None, min_length=1)
+    step_interval_minutes: Optional[int] = Field(None, ge=1)
+    auto_advance: Optional[bool] = None
+    auto_promote_when_complete: Optional[bool] = None
+    candidate_models_dir: Optional[str] = None
+    candidate_processed_dir: Optional[str] = None
+    status: Optional[str] = None

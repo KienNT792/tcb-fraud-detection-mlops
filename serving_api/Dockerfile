@@ -2,30 +2,24 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies first (layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY serving_api/requirements.txt /tmp/serving_requirements.txt
+RUN pip install --no-cache-dir -r /tmp/serving_requirements.txt
 
-# Copy serving_api source
-COPY app/ ./app/
+COPY serving_api/app ./app
+COPY ml_pipeline/src ./ml_pipeline/src
+COPY scripts ./scripts
+COPY models ./models
+COPY docs ./docs
 
-# Copy ml_pipeline source (needed for inference.py + preprocess constants)
-COPY ../ml_pipeline/src/ ./ml_pipeline/src/
-
-# Copy model artifacts and processed data
-# In production these should be mounted as volumes, not baked into the image
-COPY ../models/ ./models/
-COPY ../data/processed/ ./data/processed/
-
-# Environment — configurable via docker run -e or docker-compose
 ENV MODELS_DIR=/app/models
 ENV PROCESSED_DIR=/app/data/processed
-ENV PYTHONPATH=/app/app:/app/ml_pipeline/src
+ENV FEATURE_READY_DIR=/app/data/feature-ready
+ENV PYTHONPATH=/app:/app/app:/app/ml_pipeline/src
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
@@ -33,4 +27,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["bash", "scripts/start_api.sh"]

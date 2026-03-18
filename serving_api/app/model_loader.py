@@ -14,67 +14,63 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
-#   tcb-fraud-detection-mlops/
-#   ├── data/
-#   ├── models/
-#   ├── ml_pipeline/src/inference.py
-#   └── serving_api/app/model_loader.py
-
-_THIS_FILE   = Path(__file__).resolve()          # .../serving_api/app/model_loader.py
-_SERVING_DIR = _THIS_FILE.parent.parent          # .../serving_api/
-_PROJECT_ROOT = _SERVING_DIR.parent             # .../tcb-fraud-detection-mlops/
-_ML_PIPELINE_SRC = _PROJECT_ROOT / "ml_pipeline" / "src"
-
-if str(_ML_PIPELINE_SRC) not in sys.path:
-    sys.path.insert(0, str(_ML_PIPELINE_SRC))
-
-from inference import FraudDetector  # noqa: E402
+from infrastructure.pipeline import PIPELINE_CONFIG
+from .rollout import CanaryRolloutManager, FraudDetector
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODELS_DIR    = str(_PROJECT_ROOT / "models")
-_DEFAULT_PROCESSED_DIR = str(_PROJECT_ROOT / "data" / "processed")
+_DEFAULT_MODELS_DIR    = str(PIPELINE_CONFIG.paths.models_dir)
+_DEFAULT_PROCESSED_DIR = str(PIPELINE_CONFIG.paths.processed_dir)
+_DEFAULT_ROLLOUT_CONFIG_PATH = str(PIPELINE_CONFIG.serving.rollout_config_path)
 
 MODELS_DIR    = os.getenv("MODELS_DIR",    _DEFAULT_MODELS_DIR)
 PROCESSED_DIR = os.getenv("PROCESSED_DIR", _DEFAULT_PROCESSED_DIR)
+ROLLOUT_CONFIG_PATH = os.getenv("ROLLOUT_CONFIG_PATH", _DEFAULT_ROLLOUT_CONFIG_PATH)
 
-_detector: Optional[FraudDetector] = None
+_rollout_manager: Optional[CanaryRolloutManager] = None
 
-API_VERSION = "1.0.0"
+API_VERSION = "1.1.0"
 
 
 def get_detector() -> FraudDetector:
+    return get_rollout_manager().get_stable_detector()
 
-    if _detector is None:
+
+def get_rollout_manager() -> CanaryRolloutManager:
+    if _rollout_manager is None:
         raise RuntimeError(
-            "FraudDetector not loaded. "
+            "Serving manager not loaded. "
             "Ensure load_model() is called during API startup."
         )
-    return _detector
+    return _rollout_manager
 
 
 def load_model(
     models_dir: str = MODELS_DIR,
     processed_dir: str = PROCESSED_DIR,
-) -> FraudDetector:
-    global _detector
+    rollout_config_path: str = ROLLOUT_CONFIG_PATH,
+) -> CanaryRolloutManager:
+    global _rollout_manager
 
-    if _detector is not None:
-        logger.info("FraudDetector already loaded — reusing cached instance.")
-        return _detector
+    if _rollout_manager is not None:
+        logger.info("Serving manager already loaded — reusing cached instance.")
+        return _rollout_manager
 
     logger.info(
-        "Loading FraudDetector — models_dir=%s | processed_dir=%s",
-        models_dir, processed_dir,
+        "Loading serving manager — models_dir=%s | processed_dir=%s | rollout_config=%s",
+        models_dir, processed_dir, rollout_config_path,
     )
-    _detector = FraudDetector(models_dir, processed_dir)
-    logger.info("FraudDetector loaded and cached.")
-    return _detector
+    _rollout_manager = CanaryRolloutManager(
+        stable_models_dir=models_dir,
+        stable_processed_dir=processed_dir,
+        config_path=rollout_config_path,
+    )
+    logger.info("Serving manager loaded and cached.")
+    return _rollout_manager
 
 
 def unload_model() -> None:
     """Release the singleton — used during testing or graceful shutdown."""
-    global _detector
-    _detector = None
-    logger.info("FraudDetector unloaded.")
+    global _rollout_manager
+    _rollout_manager = None
+    logger.info("Serving manager unloaded.")

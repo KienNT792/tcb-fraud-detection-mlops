@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraud-api-config
+data:
+  MLFLOW_TRACKING_URI: "http://mlflow.default.svc.cluster.local:5000"
+  MODELS_DIR: "/app/models"
+  PROCESSED_DIR: "/app/data/processed"
+  FEATURE_READY_DIR: "/app/data/feature-ready"
+  MODEL_VERSION: "staging"
+  BOOTSTRAP_DEMO_ARTIFACTS: "false"
+  KAFKA_BOOTSTRAP_SERVERS: "redpanda.default.svc.cluster.local:9092"
+  KAFKA_INPUT_TOPIC: "transactions.raw"
+  KAFKA_OUTPUT_TOPIC: "transactions.scored"
+  ROLLOUT_CONFIG_PATH: "/app/artifacts/rollout/rollout_config.json"
+  CANDIDATE_MODELS_DIR: "/app/models/candidate"
+  CANDIDATE_PROCESSED_DIR: "/app/data/processed"
+  ROLLOUT_STEPS: "10,25,50,100"
+  ROLLOUT_STEP_INTERVAL_MINUTES: "30"
+  ROLLOUT_AUTO_ADVANCE: "false"
+  ROLLOUT_AUTO_PROMOTE: "false"
