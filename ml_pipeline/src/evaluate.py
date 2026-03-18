@@ -27,6 +27,10 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
+from infrastructure.pipeline import PIPELINE_CONFIG
+
+from .mlflow_utils import build_run_tags, configure_mlflow
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -415,10 +419,10 @@ def save_evaluation_report(
 
 
 def run_evaluation(
-    models_dir: str = "models",
-    processed_dir: str = "data/processed",
-    evaluation_dir: str = "models/evaluation",
-    min_recall: float = 0.95,
+    models_dir: str = str(PIPELINE_CONFIG.paths.models_dir),
+    processed_dir: str = str(PIPELINE_CONFIG.paths.processed_dir),
+    evaluation_dir: str = str(PIPELINE_CONFIG.paths.evaluation_dir),
+    min_recall: float = PIPELINE_CONFIG.mlflow.min_recall,
     max_threshold: float = 0.70,
 ) -> dict[str, Any]:
 
@@ -440,7 +444,9 @@ def run_evaluation(
     # Load full test DF for segment analysis (needs segment_encoded column)
     test_df = pd.read_parquet(Path(processed_dir) / "test.parquet")
 
+    configure_mlflow()
     with mlflow.start_run(run_name="evaluation"):
+        mlflow.set_tags(build_run_tags("evaluation"))
 
         # Step 2 — Threshold analysis
         threshold_metrics = evaluate_threshold(
@@ -511,8 +517,4 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent.parent
-    _models    = str(project_root / "models")
-    _processed = str(project_root / "data" / "processed")
-    _eval_dir  = str(project_root / "models" / "evaluation")
-    run_evaluation(_models, _processed, _eval_dir)
+    run_evaluation()

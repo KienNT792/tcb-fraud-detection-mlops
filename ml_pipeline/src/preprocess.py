@@ -33,6 +33,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from infrastructure.pipeline import PIPELINE_CONFIG
+
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
@@ -644,8 +646,8 @@ def save_feature_state(feature_state: dict[str, Any], output_dir: str) -> None:
 
 
 def run_preprocessing(
-    data_path: str = "data/raw/tcb_credit_fraud_dataset.csv",
-    output_dir: str = "data/processed",
+    data_path: str = str(PIPELINE_CONFIG.paths.demo_raw_path),
+    output_dir: str = str(PIPELINE_CONFIG.paths.processed_dir),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
    
     logger.info("=" * 60)
@@ -676,7 +678,4 @@ def run_preprocessing(
 
 
 if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent.parent
-    _data_path = str(project_root / "data" / "raw" / "tcb_credit_fraud_dataset.csv")
-    _output_dir = str(project_root / "data" / "processed")
-    run_preprocessing(_data_path, _output_dir)
+    run_preprocessing()

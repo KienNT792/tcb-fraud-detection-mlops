@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  ".git",
+  ".pytest_cache",
+  ".ruff_cache",
+  "models",
+]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pytest.ini_options]
+testpaths = [
+  "ml_pipeline/tests",
+  "serving_api/tests",
+]
+python_files = ["test_*.py"]

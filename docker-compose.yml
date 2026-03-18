@@ -1,0 +1,123 @@
+version: "3.9"
+
+services:
+  mlflow:
+    build:
+      context: .
+      dockerfile: ml_pipeline/Dockerfile
+    command: >
+      bash -lc "
+      mkdir -p /mlflow/backend /mlflow/artifacts &&
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/backend/mlflow.db
+      --artifacts-destination /mlflow/artifacts"
+    environment:
+      MLFLOW_TRACKING_URI: http://0.0.0.0:5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./artifacts/mlflow:/mlflow
+
+  api:
+    build:
+      context: .
+      dockerfile: serving_api/Dockerfile
+    env_file:
+      - .env.example
+    environment:
+      MODELS_DIR: /app/models
+      PROCESSED_DIR: /app/data/processed
+      FEATURE_READY_DIR: /app/data/feature-ready
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      BOOTSTRAP_DEMO_ARTIFACTS: "true"
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      - mlflow
+      - redpanda
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./artifacts:/app/artifacts
+      - api_data:/app/data
+
+  airflow:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    env_file:
+      - .env.example
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/dags
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      DATASET_VERSION: demo-v1
+      PIPELINE_ACTOR: airflow
+      PIPELINE_TRIGGER: scheduled
+    depends_on:
+      - mlflow
+      - redpanda
+    command: standalone
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/opt/airflow/project
+      - airflow_home:/opt/airflow
+      - api_data:/opt/airflow/project/data
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.8
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  airflow_home:
+  api_data:
+  grafana_data:
+  prometheus_data:

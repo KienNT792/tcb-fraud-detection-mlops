@@ -42,6 +42,16 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
+from infrastructure.pipeline import PIPELINE_CONFIG
+
+from .mlflow_utils import (
+    build_lineage_payload,
+    build_run_tags,
+    configure_mlflow,
+    default_model_name,
+    write_json,
+)
+
 # Module-level logger
 logging.basicConfig(
     level=logging.INFO,
@@ -474,8 +484,8 @@ def find_optimal_threshold(
     return optimal_threshold
 
 def run_training(
-    processed_dir: str = "data/processed",
-    models_dir: str = "models",
+    processed_dir: str = str(PIPELINE_CONFIG.paths.processed_dir),
+    models_dir: str = str(PIPELINE_CONFIG.paths.models_dir),
 ) -> dict[str, Any]:
 
     logger.info("=" * 60)
@@ -492,7 +502,9 @@ def run_training(
     X_train, X_test = filter_numeric_features(X_train, X_test)
     numeric_feature_cols: list[str] = X_train.columns.tolist()
 
+    configure_mlflow()
     with mlflow.start_run():
+        mlflow.set_tags(build_run_tags("training"))
         # Log hyperparameters
         mlflow.log_params({
             "model_type": "xgboost",
@@ -529,7 +541,19 @@ def run_training(
         mlflow.log_artifact(str(out / METRICS_FILENAME))
         mlflow.log_artifact(str(out / FEATURE_IMPORTANCE_FILENAME))
 
-        logger.info("MLflow run logged — run_id: %s", mlflow.active_run().info.run_id)
+        run_id = mlflow.active_run().info.run_id
+        logger.info("MLflow run logged — run_id: %s", run_id)
+
+        training_run = build_lineage_payload(run_id, "training")
+        training_run["model_name"] = default_model_name()
+        training_run["metrics"] = {
+            "roc_auc": metrics["roc_auc"],
+            "pr_auc": metrics["pr_auc"],
+            "f1": metrics["f1"],
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+        }
+        write_json(Path(models_dir) / "training_run.json", training_run)
 
     logger.info("=" * 60)
     logger.info("TRAINING PIPELINE COMPLETE")
@@ -545,7 +569,4 @@ def run_training(
 
 
 if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent.parent
-    _processed = str(project_root / "data" / "processed")
-    _models = str(project_root / "models")
-    run_training(_processed, _models)
+    run_training()
