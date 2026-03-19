@@ -10,11 +10,22 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+except ImportError:  # pragma: no cover - local dev without optional dependency
+    Instrumentator = None
+
 from .model_loader import (
     API_VERSION,
     get_detector,
     load_model,
     unload_model,
+)
+from .observability import (
+    bootstrap_observability,
+    record_http_observation,
+    record_prediction_observation,
+    shutdown_observability,
 )
 from .schemas import (
     BatchPredictionItem,
@@ -41,7 +52,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("TCB FRAUD DETECTION API — STARTING UP")
     logger.info("=" * 50)
     try:
-        load_model()
+        detector = load_model()
+        bootstrap_observability(detector)
         logger.info("Model loaded successfully. API ready.")
     except FileNotFoundError as exc:
         logger.error("STARTUP FAILED — artifact missing: %s", exc)
@@ -50,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # API is live and serving requests
 
     logger.info("Shutting down — releasing model.")
+    shutdown_observability()
     unload_model()
     logger.info("API shutdown complete.")
 
@@ -67,6 +80,20 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+if Instrumentator is not None:
+    Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/health"],
+    ).instrument(app).expose(
+        app,
+        endpoint="/metrics",
+        include_in_schema=False,
+        tags=["Monitoring"],
+    )
+else:
+    logger.warning("Prometheus instrumentation disabled: dependency not installed.")
+
 # CORS — allow all origins in development; restrict in production
 app.add_middleware(
     CORSMiddleware,
@@ -81,6 +108,12 @@ async def add_process_time(request: Request, call_next: Any) -> Any:
     t0 = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - t0) * 1000
+    record_http_observation(
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_seconds=elapsed_ms / 1000,
+    )
     response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.1f}"
     logger.info(
         "%s %s → %d (%.1fms)",
@@ -179,14 +212,24 @@ async def predict(
     Returns a fraud_score in [0, 1], a binary is_fraud_pred flag based on
     the optimal threshold, and a risk_level classification.
     """
+    payload = request.model_dump()
     try:
-        result = detector.predict_single(request.model_dump())
+        result = detector.predict_single(payload)
     except Exception as exc:
         logger.exception("predict() failed for tx_id=%s", request.transaction_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {exc}",
         ) from exc
+
+    raw_df = pd.DataFrame([payload])
+    predictions_df = pd.DataFrame([result])
+    record_prediction_observation(
+        endpoint="predict",
+        raw_df=raw_df,
+        predictions_df=predictions_df,
+        detector=detector,
+    )
 
     return PredictionResponse(**result)
 
@@ -238,6 +281,12 @@ async def predict_batch(
 
     n_fraud = int(results_df["is_fraud_pred"].sum())
     total   = len(predictions)
+    record_prediction_observation(
+        endpoint="predict_batch",
+        raw_df=raw_df,
+        predictions_df=results_df,
+        detector=detector,
+    )
 
     return BatchPredictionResponse(
         total          = total,
