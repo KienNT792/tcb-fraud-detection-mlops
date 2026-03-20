@@ -92,7 +92,9 @@ if Instrumentator is not None:
         tags=["Monitoring"],
     )
 else:
-    logger.warning("Prometheus instrumentation disabled: dependency not installed.")
+    logger.warning(
+        "Prometheus instrumentation disabled: dependency not installed."
+    )
 
 # CORS — allow all origins in development; restrict in production
 app.add_middleware(
@@ -117,14 +119,19 @@ async def add_process_time(request: Request, call_next: Any) -> Any:
     response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.1f}"
     logger.info(
         "%s %s → %d (%.1fms)",
-        request.method, request.url.path,
-        response.status_code, elapsed_ms,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
     )
     return response
 
 
 @app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+async def value_error_handler(
+    request: Request,
+    exc: ValueError,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=ErrorResponse(
@@ -136,7 +143,10 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
 
 
 @app.exception_handler(RuntimeError)
-async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResponse:
+async def runtime_error_handler(
+    request: Request,
+    exc: RuntimeError,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content=ErrorResponse(
@@ -155,12 +165,12 @@ async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResp
 async def root() -> dict[str, str]:
     """Return basic API metadata."""
     return {
-        "name":        "TCB Fraud Detection API",
-        "version":     API_VERSION,
-        "docs":        "/docs",
-        "health":      "/health",
-        "predict":     "POST /predict",
-        "batch":       "POST /predict/batch",
+        "name": "TCB Fraud Detection API",
+        "version": API_VERSION,
+        "docs": "/docs",
+        "health": "/health",
+        "predict": "POST /predict",
+        "batch": "POST /predict/batch",
     }
 
 
@@ -178,13 +188,13 @@ async def health(detector=Depends(get_detector)) -> HealthResponse:
     """
     info = detector.health_check()
     return HealthResponse(
-        status         = info["status"],
-        model_type     = info["model_type"],
-        feature_count  = info["feature_count"],
-        threshold      = info["threshold"],
-        best_iteration = info["best_iteration"],
-        loaded_at      = info["loaded_at"],
-        api_version    = API_VERSION,
+        status=info["status"],
+        model_type=info["model_type"],
+        feature_count=info["feature_count"],
+        threshold=info["threshold"],
+        best_iteration=info["best_iteration"],
+        loaded_at=info["loaded_at"],
+        api_version=API_VERSION,
     )
 
 
@@ -216,7 +226,10 @@ async def predict(
     try:
         result = detector.predict_single(payload)
     except Exception as exc:
-        logger.exception("predict() failed for tx_id=%s", request.transaction_id)
+        logger.exception(
+            "predict() failed for tx_id=%s",
+            request.transaction_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {exc}",
@@ -242,7 +255,10 @@ async def predict(
     tags=["Prediction"],
     responses={
         422: {"model": ErrorResponse, "description": "Validation error"},
-        500: {"model": ErrorResponse, "description": "Batch prediction failed"},
+        500: {
+            "model": ErrorResponse,
+            "description": "Batch prediction failed",
+        },
     },
 )
 async def predict_batch(
@@ -263,7 +279,10 @@ async def predict_batch(
         )
         results_df = detector.predict_batch(raw_df)
     except Exception as exc:
-        logger.exception("predict_batch() failed — %d transactions", len(request.transactions))
+        logger.exception(
+            "predict_batch() failed — %d transactions",
+            len(request.transactions),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Batch prediction failed: {exc}",
@@ -271,16 +290,16 @@ async def predict_batch(
 
     predictions = [
         BatchPredictionItem(
-            transaction_id = str(row["transaction_id"]),
-            fraud_score    = float(row["fraud_score"]),
-            is_fraud_pred  = bool(row["is_fraud_pred"]),
-            risk_level     = str(row["risk_level"]),
+            transaction_id=str(row["transaction_id"]),
+            fraud_score=float(row["fraud_score"]),
+            is_fraud_pred=bool(row["is_fraud_pred"]),
+            risk_level=str(row["risk_level"]),
         )
         for _, row in results_df.iterrows()
     ]
 
     n_fraud = int(results_df["is_fraud_pred"].sum())
-    total   = len(predictions)
+    total = len(predictions)
     record_prediction_observation(
         endpoint="predict_batch",
         raw_df=raw_df,
@@ -289,9 +308,9 @@ async def predict_batch(
     )
 
     return BatchPredictionResponse(
-        total          = total,
-        fraud_detected = n_fraud,
-        fraud_rate     = round(n_fraud / total, 6) if total > 0 else 0.0,
-        threshold      = detector._threshold,
-        predictions    = predictions,
+        total=total,
+        fraud_detected=n_fraud,
+        fraud_rate=round(n_fraud / total, 6) if total > 0 else 0.0,
+        threshold=detector._threshold,
+        predictions=predictions,
     )

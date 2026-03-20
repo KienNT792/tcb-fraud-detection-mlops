@@ -21,9 +21,9 @@ from typing import Optional
 #   ├── ml_pipeline/src/inference.py
 #   └── serving_api/app/model_loader.py
 
-_THIS_FILE   = Path(__file__).resolve()          # .../serving_api/app/model_loader.py
-_SERVING_DIR = _THIS_FILE.parent.parent          # .../serving_api/
-_PROJECT_ROOT = _SERVING_DIR.parent             # .../tcb-fraud-detection-mlops/
+_THIS_FILE = Path(__file__).resolve()  # .../serving_api/app/model_loader.py
+_SERVING_DIR = _THIS_FILE.parent.parent  # .../serving_api/
+_PROJECT_ROOT = _SERVING_DIR.parent  # .../tcb-fraud-detection-mlops/
 _ML_PIPELINE_SRC = _PROJECT_ROOT / "ml_pipeline" / "src"
 
 if str(_ML_PIPELINE_SRC) not in sys.path:
@@ -33,10 +33,10 @@ from inference import FraudDetector  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODELS_DIR    = str(_PROJECT_ROOT / "models")
+_DEFAULT_MODELS_DIR = str(_PROJECT_ROOT / "models")
 _DEFAULT_PROCESSED_DIR = str(_PROJECT_ROOT / "data" / "processed")
 
-MODELS_DIR    = os.getenv("MODELS_DIR",    _DEFAULT_MODELS_DIR)
+MODELS_DIR = os.getenv("MODELS_DIR", _DEFAULT_MODELS_DIR)
 PROCESSED_DIR = os.getenv("PROCESSED_DIR", _DEFAULT_PROCESSED_DIR)
 
 _detector: Optional[FraudDetector] = None
@@ -45,7 +45,6 @@ API_VERSION = "1.0.0"
 
 
 def get_detector() -> FraudDetector:
-
     if _detector is None:
         raise RuntimeError(
             "FraudDetector not loaded. "
@@ -66,7 +65,8 @@ def load_model(
 
     logger.info(
         "Loading FraudDetector — models_dir=%s | processed_dir=%s",
-        models_dir, processed_dir,
+        models_dir,
+        processed_dir,
     )
     _detector = FraudDetector(models_dir, processed_dir)
     logger.info("FraudDetector loaded and cached.")

@@ -13,56 +13,71 @@ class TransactionRequest(BaseModel):
     """
 
     # Identifiers
-    transaction_id:          str   = Field(..., description="Unique transaction ID")
-    timestamp:               str   = Field(..., description="ISO datetime, e.g. '2026-03-14 10:23:00'")
-    customer_id:             str   = Field(..., description="Customer identifier")
+    transaction_id: str = Field(..., description="Unique transaction ID")
+    timestamp: str = Field(
+        ..., description="ISO datetime, e.g. '2026-03-14 10:23:00'"
+    )
+    customer_id: str = Field(..., description="Customer identifier")
 
     # Core financials
-    amount:                  float = Field(..., gt=0, description="Transaction amount in VND")
-    customer_tier:           str   = Field(..., description="INSPIRE | PRIORITY | MASS | PRIVATE")
+    amount: float = Field(..., gt=0, description="Transaction amount in VND")
+    customer_tier: str = Field(
+        ..., description="INSPIRE | PRIORITY | MASS | PRIVATE"
+    )
 
     # Card info
-    card_type:               Optional[str]   = Field(None, description="VISA | MASTERCARD")
-    card_tier:               Optional[str]   = Field(None, description="GOLD | PLATINUM | ...")
-    card_bin:                Optional[int]   = Field(None, description="First 6 digits of card number")
-    currency:                Optional[str]   = Field("VND", description="Transaction currency")
-    account_age_days:        Optional[int]   = Field(None, ge=0)
+    card_type: Optional[str] = Field(None, description="VISA | MASTERCARD")
+    card_tier: Optional[str] = Field(
+        None, description="GOLD | PLATINUM | ..."
+    )
+    card_bin: Optional[int] = Field(
+        None, description="First 6 digits of card number"
+    )
+    currency: Optional[str] = Field("VND", description="Transaction currency")
+    account_age_days: Optional[int] = Field(None, ge=0)
 
     # Merchant info
-    merchant_name:           Optional[str]   = None
-    mcc_code:                Optional[int]   = None
-    merchant_category:       Optional[str]   = None
-    merchant_city:           Optional[str]   = None
-    merchant_country:        Optional[str]   = Field(None, description="ISO country code, e.g. 'VN'")
+    merchant_name: Optional[str] = None
+    mcc_code: Optional[int] = None
+    merchant_category: Optional[str] = None
+    merchant_city: Optional[str] = None
+    merchant_country: Optional[str] = Field(
+        None, description="ISO country code, e.g. 'VN'"
+    )
 
     # Device / network
-    device_type:             Optional[str]   = None
-    os:                      Optional[str]   = None
-    ip_country:              Optional[str]   = None
+    device_type: Optional[str] = None
+    os: Optional[str] = None
+    ip_country: Optional[str] = None
 
     # Behavioural features
-    distance_from_home_km:   Optional[float] = Field(None, ge=0)
-    cvv_match:               Optional[str]   = Field(None, description="Y | N | N/A")
-    is_3d_secure:            Optional[str]   = Field(None, description="Y | N | N/A")
-    transaction_status:      Optional[str]   = Field(None, description="APPROVED | DECLINED")
-    tx_count_last_1h:        Optional[int]   = Field(None, ge=0)
-    tx_count_last_24h:       Optional[int]   = Field(None, ge=0)
-    time_since_last_tx_min:  Optional[float] = Field(None, ge=0)
-    avg_amount_last_30d:     Optional[float] = Field(None, ge=0)
-    amount_ratio_vs_avg:     Optional[float] = Field(None, ge=0)
-    is_new_device:           Optional[int]   = Field(None, ge=0, le=1)
-    is_new_merchant:         Optional[int]   = Field(None, ge=0, le=1)
+    distance_from_home_km: Optional[float] = Field(None, ge=0)
+    cvv_match: Optional[str] = Field(None, description="Y | N | N/A")
+    is_3d_secure: Optional[str] = Field(None, description="Y | N | N/A")
+    transaction_status: Optional[str] = Field(
+        None, description="APPROVED | DECLINED"
+    )
+    tx_count_last_1h: Optional[int] = Field(None, ge=0)
+    tx_count_last_24h: Optional[int] = Field(None, ge=0)
+    time_since_last_tx_min: Optional[float] = Field(None, ge=0)
+    avg_amount_last_30d: Optional[float] = Field(None, ge=0)
+    amount_ratio_vs_avg: Optional[float] = Field(None, ge=0)
+    is_new_device: Optional[int] = Field(None, ge=0, le=1)
+    is_new_merchant: Optional[int] = Field(None, ge=0, le=1)
 
     # Time features (pre-computed in raw data)
-    hour_of_day:             Optional[int]   = Field(None, ge=0, le=23)
-    is_weekend:              Optional[int]   = Field(None, ge=0, le=1)
+    hour_of_day: Optional[int] = Field(None, ge=0, le=23)
+    is_weekend: Optional[int] = Field(None, ge=0, le=1)
 
     @field_validator("customer_tier")
     @classmethod
     def validate_tier(cls, v: str) -> str:
         valid = {"INSPIRE", "PRIORITY", "MASS", "PRIVATE"}
         if v.upper() not in valid:
-            raise ValueError(f"customer_tier must be one of {valid}, got '{v}'")
+            raise ValueError(
+                f"customer_tier must be one of {valid}, "
+                f"got '{v}'"
+            )
         return v.upper()
 
     @field_validator("timestamp")
@@ -73,7 +88,8 @@ class TransactionRequest(BaseModel):
             datetime.fromisoformat(v.replace("T", " "))
         except ValueError:
             raise ValueError(
-                f"timestamp must be ISO format (e.g. '2026-03-14 10:23:00'), got '{v}'"
+                f"timestamp must be ISO format "
+                f"(e.g. '2026-03-14 10:23:00'), got '{v}'"
             )
         return v
 
@@ -129,57 +145,68 @@ class BatchTransactionRequest(BaseModel):
 class PredictionResponse(BaseModel):
     """Response for a single transaction prediction."""
 
-    transaction_id: str   = Field(..., description="Echoed from request")
-    fraud_score:    float = Field(..., ge=0, le=1, description="Fraud probability [0, 1]")
-    is_fraud_pred:  bool  = Field(..., description="True if fraud_score >= threshold")
-    threshold:      float = Field(..., description="Decision threshold used")
-    risk_level:     str   = Field(..., description="LOW | MEDIUM | HIGH")
+    transaction_id: str = Field(..., description="Echoed from request")
+    fraud_score: float = Field(
+        ..., ge=0, le=1, description="Fraud probability [0, 1]"
+    )
+    is_fraud_pred: bool = Field(
+        ..., description="True if fraud_score >= threshold"
+    )
+    threshold: float = Field(..., description="Decision threshold used")
+    risk_level: str = Field(..., description="LOW | MEDIUM | HIGH")
 
-    model_config = {"json_schema_extra": {
-        "example": {
-            "transaction_id": "TX_001",
-            "fraud_score":    0.0231,
-            "is_fraud_pred":  False,
-            "threshold":      0.6788,
-            "risk_level":     "LOW",
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "transaction_id": "TX_001",
+                "fraud_score": 0.0231,
+                "is_fraud_pred": False,
+                "threshold": 0.6788,
+                "risk_level": "LOW",
+            }
         }
-    }}
+    }
 
 
 class BatchPredictionItem(BaseModel):
     """Single item in a batch prediction response."""
 
     transaction_id: str
-    fraud_score:    float
-    is_fraud_pred:  bool
-    risk_level:     str
+    fraud_score: float
+    is_fraud_pred: bool
+    risk_level: str
 
 
 class BatchPredictionResponse(BaseModel):
     """Response for a batch prediction request."""
 
-    total:          int                     = Field(..., description="Total transactions scored")
-    fraud_detected: int                     = Field(..., description="Number predicted as fraud")
-    fraud_rate:     float                   = Field(..., description="Fraction predicted as fraud")
-    threshold:      float                   = Field(..., description="Decision threshold used")
-    predictions:    list[BatchPredictionItem]
+    total: int = Field(..., description="Total transactions scored")
+    fraud_detected: int = Field(
+        ..., description="Number predicted as fraud"
+    )
+    fraud_rate: float = Field(
+        ..., description="Fraction predicted as fraud"
+    )
+    threshold: float = Field(..., description="Decision threshold used")
+    predictions: list[BatchPredictionItem]
 
 
 class HealthResponse(BaseModel):
     """API and model health status."""
 
-    status:          str          = Field(..., description="OK | DEGRADED | ERROR")
-    model_type:      str
-    feature_count:   int
-    threshold:       float
-    best_iteration:  int
-    loaded_at:       str
-    api_version:     str
+    status: str = Field(..., description="OK | DEGRADED | ERROR")
+    model_type: str
+    feature_count: int
+    threshold: float
+    best_iteration: int
+    loaded_at: str
+    api_version: str
     model_config = {"protected_namespaces": ()}
+
 
 class ErrorResponse(BaseModel):
     """Structured error response."""
 
-    error:   str
-    detail:  Any  = None
+    error: str
+    detail: Any = None
     status_code: int

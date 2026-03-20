@@ -66,11 +66,23 @@ PREDICTION_AMOUNT_VND = Histogram(
     "tcb_prediction_amount_vnd",
     "Distribution of transaction amounts scored by the API.",
     ["endpoint"],
-    buckets=(50_000, 100_000, 250_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000),
+    buckets=(
+        50_000,
+        100_000,
+        250_000,
+        500_000,
+        1_000_000,
+        5_000_000,
+        10_000_000,
+        50_000_000,
+    ),
 )
 DRIFT_BASELINE_READY = Gauge(
     "tcb_drift_baseline_ready",
-    "Drift baseline readiness. 1 means the monitor has a usable reference window.",
+    (
+        "Drift baseline readiness. 1 means the monitor "
+        "has a usable reference window."
+    ),
 )
 DRIFT_REFERENCE_MODE = Gauge(
     "tcb_drift_reference_mode",
@@ -108,7 +120,10 @@ DRIFT_FEATURE_SCORE = Gauge(
 )
 DRIFT_FEATURE_ALERT = Gauge(
     "tcb_drift_feature_alert",
-    "Per-feature alert state. 1 means the feature is above the drift threshold.",
+    (
+        "Per-feature alert state. 1 means the feature "
+        "is above the drift threshold."
+    ),
     ["feature"],
 )
 
@@ -146,7 +161,10 @@ def record_http_observation(
         "status": str(status_code),
     }
     HTTP_REQUESTS_TOTAL.labels(**labels).inc()
-    HTTP_REQUEST_DURATION_SECONDS.labels(method=method, path=path).observe(duration_seconds)
+    HTTP_REQUEST_DURATION_SECONDS.labels(
+        method=method,
+        path=path,
+    ).observe(duration_seconds)
 
 
 def record_prediction_observation(
@@ -167,24 +185,45 @@ def record_prediction_observation(
         for amount in raw_df["amount"].dropna().tolist():
             amount_value = float(amount)
             if isfinite(amount_value) and amount_value > 0:
-                PREDICTION_AMOUNT_VND.labels(endpoint=endpoint).observe(amount_value)
+                PREDICTION_AMOUNT_VND.labels(
+                    endpoint=endpoint
+                ).observe(amount_value)
 
     if not predictions_df.empty:
-        fraud_count = int(pd.to_numeric(predictions_df["is_fraud_pred"], errors="coerce").fillna(0).sum())
+        fraud_count = int(
+            pd.to_numeric(
+                predictions_df["is_fraud_pred"],
+                errors="coerce",
+            ).fillna(0).sum()
+        )
         PREDICTION_FRAUD_TOTAL.labels(endpoint=endpoint).inc(fraud_count)
 
-        for risk_level in predictions_df["risk_level"].fillna("UNKNOWN").astype(str).tolist():
+        for risk_level in (
+            predictions_df["risk_level"]
+            .fillna("UNKNOWN")
+            .astype(str)
+            .tolist()
+        ):
             PREDICTION_RISK_LEVEL_TOTAL.labels(
                 endpoint=endpoint,
                 risk_level=risk_level,
             ).inc()
 
-        for score in pd.to_numeric(predictions_df["fraud_score"], errors="coerce").dropna().tolist():
+        for score in (
+            pd.to_numeric(
+                predictions_df["fraud_score"],
+                errors="coerce",
+            )
+            .dropna()
+            .tolist()
+        ):
             score_value = float(score)
             if isfinite(score_value):
                 PREDICTION_SCORE.labels(endpoint=endpoint).observe(score_value)
 
-    _apply_drift_snapshot(_DRIFT_MONITOR.observe(raw_df=raw_df, detector=detector))
+    _apply_drift_snapshot(
+        _DRIFT_MONITOR.observe(raw_df=raw_df, detector=detector)
+    )
 
 
 def _apply_drift_snapshot(snapshot: DriftSnapshot) -> None:
