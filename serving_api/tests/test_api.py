@@ -7,19 +7,14 @@ without requiring actual model artifacts on disk.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+from serving_api.app import main as main_module
 
-# Patch load_model before importing the app so lifespan doesn't try
-# to load real artifacts during test collection
-with patch("model_loader.load_model"):
-    from main import app
+app = main_module.app
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +82,7 @@ def make_mock_detector(
     }
     detector.predict_single.return_value = single_result or MOCK_SINGLE_RESULT
     detector._threshold = 0.6788
+    detector._feature_cols = ["amount", "transaction_hour", "segment_encoded"]
 
     if batch_df is None:
         batch_df = pd.DataFrame([{
@@ -97,6 +93,16 @@ def make_mock_detector(
         }])
     detector.predict_batch.return_value = batch_df
 
+    def fake_transform(df: pd.DataFrame) -> pd.DataFrame:
+        timestamp = pd.to_datetime(df["timestamp"], errors="coerce")
+        return pd.DataFrame({
+            "amount": pd.to_numeric(df["amount"], errors="coerce").fillna(0.0),
+            "transaction_hour": timestamp.dt.hour.fillna(0).astype(float),
+            "segment_encoded": 1.0,
+        })
+
+    detector._transform.side_effect = fake_transform
+
     return detector
 
 
@@ -104,11 +110,9 @@ def make_mock_detector(
 def client():
     """TestClient with mocked FraudDetector injected via dependency override."""
     mock_detector = make_mock_detector()
-    app.dependency_overrides["get_detector"] = lambda: mock_detector
+    app.dependency_overrides[main_module.get_detector] = lambda: mock_detector
 
-    # Override via module-level get_detector used in Depends()
-    import model_loader
-    with patch.object(model_loader, "get_detector", return_value=mock_detector):
+    with patch.object(main_module, "load_model"), patch.object(main_module, "unload_model"):
         with TestClient(app, raise_server_exceptions=True) as c:
             yield c, mock_detector
 
@@ -254,6 +258,31 @@ class TestPredictBatch:
         c, _ = client
         resp = c.post("/predict/batch", json={"transactions": []})
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /metrics
+# ---------------------------------------------------------------------------
+class TestMetrics:
+    def test_exports_custom_prediction_metrics(self, client):
+        c, _ = client
+        c.post("/predict", json=VALID_TX)
+
+        resp = c.get("/metrics")
+
+        assert resp.status_code == 200
+        assert "tcb_prediction_requests_total" in resp.text
+        assert "tcb_prediction_score_bucket" in resp.text
+
+    def test_exports_custom_drift_metrics(self, client):
+        c, _ = client
+        c.post("/predict/batch", json={"transactions": [VALID_TX]})
+
+        resp = c.get("/metrics")
+
+        assert resp.status_code == 200
+        assert "tcb_drift_baseline_ready" in resp.text
+        assert "tcb_drift_feature_score" in resp.text
 
     def test_total_matches_input_count(self, client):
         import pandas as pd

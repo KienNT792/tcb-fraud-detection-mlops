@@ -10,11 +10,22 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+except ImportError:  # pragma: no cover - local dev without optional dependency
+    Instrumentator = None
+
 from .model_loader import (
     API_VERSION,
     get_detector,
     load_model,
     unload_model,
+)
+from .observability import (
+    bootstrap_observability,
+    record_http_observation,
+    record_prediction_observation,
+    shutdown_observability,
 )
 from .schemas import (
     BatchPredictionItem,
@@ -41,7 +52,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("TCB FRAUD DETECTION API — STARTING UP")
     logger.info("=" * 50)
     try:
-        load_model()
+        detector = load_model()
+        bootstrap_observability(detector)
         logger.info("Model loaded successfully. API ready.")
     except FileNotFoundError as exc:
         logger.error("STARTUP FAILED — artifact missing: %s", exc)
@@ -50,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # API is live and serving requests
 
     logger.info("Shutting down — releasing model.")
+    shutdown_observability()
     unload_model()
     logger.info("API shutdown complete.")
 
@@ -67,6 +80,22 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+if Instrumentator is not None:
+    Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/health"],
+    ).instrument(app).expose(
+        app,
+        endpoint="/metrics",
+        include_in_schema=False,
+        tags=["Monitoring"],
+    )
+else:
+    logger.warning(
+        "Prometheus instrumentation disabled: dependency not installed."
+    )
+
 # CORS — allow all origins in development; restrict in production
 app.add_middleware(
     CORSMiddleware,
@@ -81,17 +110,28 @@ async def add_process_time(request: Request, call_next: Any) -> Any:
     t0 = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - t0) * 1000
+    record_http_observation(
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_seconds=elapsed_ms / 1000,
+    )
     response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.1f}"
     logger.info(
         "%s %s → %d (%.1fms)",
-        request.method, request.url.path,
-        response.status_code, elapsed_ms,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
     )
     return response
 
 
 @app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+async def value_error_handler(
+    request: Request,
+    exc: ValueError,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=ErrorResponse(
@@ -103,7 +143,10 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
 
 
 @app.exception_handler(RuntimeError)
-async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResponse:
+async def runtime_error_handler(
+    request: Request,
+    exc: RuntimeError,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content=ErrorResponse(
@@ -122,12 +165,12 @@ async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResp
 async def root() -> dict[str, str]:
     """Return basic API metadata."""
     return {
-        "name":        "TCB Fraud Detection API",
-        "version":     API_VERSION,
-        "docs":        "/docs",
-        "health":      "/health",
-        "predict":     "POST /predict",
-        "batch":       "POST /predict/batch",
+        "name": "TCB Fraud Detection API",
+        "version": API_VERSION,
+        "docs": "/docs",
+        "health": "/health",
+        "predict": "POST /predict",
+        "batch": "POST /predict/batch",
     }
 
 
@@ -145,13 +188,13 @@ async def health(detector=Depends(get_detector)) -> HealthResponse:
     """
     info = detector.health_check()
     return HealthResponse(
-        status         = info["status"],
-        model_type     = info["model_type"],
-        feature_count  = info["feature_count"],
-        threshold      = info["threshold"],
-        best_iteration = info["best_iteration"],
-        loaded_at      = info["loaded_at"],
-        api_version    = API_VERSION,
+        status=info["status"],
+        model_type=info["model_type"],
+        feature_count=info["feature_count"],
+        threshold=info["threshold"],
+        best_iteration=info["best_iteration"],
+        loaded_at=info["loaded_at"],
+        api_version=API_VERSION,
     )
 
 
@@ -179,14 +222,27 @@ async def predict(
     Returns a fraud_score in [0, 1], a binary is_fraud_pred flag based on
     the optimal threshold, and a risk_level classification.
     """
+    payload = request.model_dump()
     try:
-        result = detector.predict_single(request.model_dump())
+        result = detector.predict_single(payload)
     except Exception as exc:
-        logger.exception("predict() failed for tx_id=%s", request.transaction_id)
+        logger.exception(
+            "predict() failed for tx_id=%s",
+            request.transaction_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {exc}",
         ) from exc
+
+    raw_df = pd.DataFrame([payload])
+    predictions_df = pd.DataFrame([result])
+    record_prediction_observation(
+        endpoint="predict",
+        raw_df=raw_df,
+        predictions_df=predictions_df,
+        detector=detector,
+    )
 
     return PredictionResponse(**result)
 
@@ -199,7 +255,10 @@ async def predict(
     tags=["Prediction"],
     responses={
         422: {"model": ErrorResponse, "description": "Validation error"},
-        500: {"model": ErrorResponse, "description": "Batch prediction failed"},
+        500: {
+            "model": ErrorResponse,
+            "description": "Batch prediction failed",
+        },
     },
 )
 async def predict_batch(
@@ -220,7 +279,10 @@ async def predict_batch(
         )
         results_df = detector.predict_batch(raw_df)
     except Exception as exc:
-        logger.exception("predict_batch() failed — %d transactions", len(request.transactions))
+        logger.exception(
+            "predict_batch() failed — %d transactions",
+            len(request.transactions),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Batch prediction failed: {exc}",
@@ -228,21 +290,27 @@ async def predict_batch(
 
     predictions = [
         BatchPredictionItem(
-            transaction_id = str(row["transaction_id"]),
-            fraud_score    = float(row["fraud_score"]),
-            is_fraud_pred  = bool(row["is_fraud_pred"]),
-            risk_level     = str(row["risk_level"]),
+            transaction_id=str(row["transaction_id"]),
+            fraud_score=float(row["fraud_score"]),
+            is_fraud_pred=bool(row["is_fraud_pred"]),
+            risk_level=str(row["risk_level"]),
         )
         for _, row in results_df.iterrows()
     ]
 
     n_fraud = int(results_df["is_fraud_pred"].sum())
-    total   = len(predictions)
+    total = len(predictions)
+    record_prediction_observation(
+        endpoint="predict_batch",
+        raw_df=raw_df,
+        predictions_df=results_df,
+        detector=detector,
+    )
 
     return BatchPredictionResponse(
-        total          = total,
-        fraud_detected = n_fraud,
-        fraud_rate     = round(n_fraud / total, 6) if total > 0 else 0.0,
-        threshold      = detector._threshold,
-        predictions    = predictions,
+        total=total,
+        fraud_detected=n_fraud,
+        fraud_rate=round(n_fraud / total, 6) if total > 0 else 0.0,
+        threshold=detector._threshold,
+        predictions=predictions,
     )

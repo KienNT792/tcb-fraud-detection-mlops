@@ -5,3 +5,7 @@ data/
 artifacts/
 .mlflow/
 .env
+volumes/
+airflow_logs/
+prometheus_data/
+grafana_data/

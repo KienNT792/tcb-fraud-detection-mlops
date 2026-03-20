@@ -17,6 +17,7 @@
 - [API Usage](#-api-usage)
 - [Responsible AI](#-responsible-ai)
 - [Tech Stack](#-tech-stack)
+- [CI/CD Deployment](#-cicd-deployment)
 - [Testing](#-testing)
 
 ---
@@ -138,8 +139,10 @@ tcb-fraud-detection-mlops/
 ├── .github/
 │   └── workflows/                  #   GitHub Actions CI/CD pipelines
 │
+├── Jenkinsfile                     #   Jenkins pipeline for CI/CD on Google Cloud VPS
+├── .env.example                    #   Example runtime secrets/env vars for docker-compose
 ├── .dvc/                           # 📁 DVC configuration for data versioning
-├── docker-compose.yml              #   Multi-service orchestration (API, MLflow, Prometheus, Grafana)
+├── docker-compose.yml              #   Multi-service orchestration (API, MLflow, MinIO, Airflow, Prometheus, Grafana)
 ├── Makefile                        #   CLI shortcuts for common tasks
 └── .gitignore                      #   Git ignore rules
 ```
@@ -372,8 +375,22 @@ This project adheres to **Responsible AI** principles as mandated by the grading
 | Containerization | Docker, Docker Compose |
 | Monitoring | Evidently AI, Prometheus, Grafana |
 | Orchestration | Apache Airflow |
-| CI/CD | GitHub Actions |
+| CI/CD | Jenkins (deployment) + GitHub Actions (repository guard) |
 | Testing | pytest, pytest-cov |
+
+---
+
+## 🚢 CI/CD Deployment
+
+The deployment workflow proposed for `dev/ver2` packages the platform with
+Docker and deploys it to a Google Cloud VPS through Jenkins.
+
+- `Jenkinsfile` defines the CI/CD stages: checkout, lint, tests, Docker build, SSH deploy, and health checks.
+- `docker-compose.yml` brings up the runtime stack: FastAPI, MLflow, MinIO, Airflow, Prometheus, Grafana, plus host/container exporters.
+- `dags/fraud_pipeline.py` schedules the nightly `preprocess -> train -> evaluate` retraining pipeline.
+- `serving_api/app/main.py` now exposes `/metrics` so Prometheus can scrape API latency and request metrics.
+
+See [docs/cicd_proposal.md](docs/cicd_proposal.md) for the full deployment flow and environment setup.
 
 ---
 

@@ -1,0 +1,192 @@
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: serving_api/Dockerfile
+    image: tcb-fraud-fastapi:${IMAGE_TAG:-local}
+    container_name: tcb-fastapi
+    env_file:
+      - .env
+    environment:
+      MODELS_DIR: /app/models
+      PROCESSED_DIR: /app/data/processed
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "${FASTAPI_PORT:-8000}:8000"
+    volumes:
+      - ./models:/app/models
+      - ./data/processed:/app/data/processed:ro
+    depends_on:
+      mlflow:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    container_name: tcb-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - ./volumes/minio:/data
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc
+    container_name: tcb-minio-init
+    depends_on:
+      - minio
+    entrypoint: /bin/sh
+    command: >
+      -c '
+      until mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do
+        echo "Waiting for MinIO...";
+        sleep 2;
+      done;
+      mc mb -p local/${MINIO_BUCKET} || true;
+      mc anonymous set private local/${MINIO_BUCKET} || true;
+      '
+    networks:
+      - mlops
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.3
+    container_name: tcb-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow.db
+      --artifacts-destination s3://${MINIO_BUCKET}
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    volumes:
+      - ./volumes/mlflow:/mlflow
+    working_dir: /mlflow
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  airflow:
+    image: apache/airflow:2.10.3-python3.10
+    container_name: tcb-airflow
+    user: "${AIRFLOW_UID:-50000}:0"
+    command: standalone
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
+      PIP_ADDITIONAL_REQUIREMENTS: >-
+        -r /opt/airflow/project/ml_pipeline/requirements.txt
+      PROJECT_ROOT: /opt/airflow/project
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - .:/opt/airflow/project
+      - ./volumes/airflow:/opt/airflow
+    depends_on:
+      mlflow:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    container_name: tcb-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./volumes/prometheus:/prometheus
+    depends_on:
+      - fastapi
+      - node-exporter
+      - cadvisor
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.4.1
+    container_name: tcb-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter
+    container_name: tcb-node-exporter
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor
+    container_name: tcb-cadvisor
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    ports:
+      - "${CADVISOR_PORT:-8081}:8080"
+    networks:
+      - mlops
+    restart: unless-stopped
+
+networks:
+  mlops:
+    name: tcb-mlops-network
+
+volumes:
+  grafana-data:

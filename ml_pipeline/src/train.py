@@ -19,7 +19,7 @@ Usage
 """
 
 from __future__ import annotations
-import numpy as np
+
 import json
 import logging
 import time
@@ -69,7 +69,8 @@ def load_data(
 
     Reads the artifacts produced by the preprocessing pipeline:
     - ``train.parquet``, ``test.parquet``: processed splits.
-    - ``features.json``: canonical feature list (excludes identifiers & target).
+    - ``features.json``: canonical feature list
+      (excludes identifiers & target).
 
     Args:
         processed_dir: Path to the ``data/processed/`` directory.
@@ -162,8 +163,8 @@ def compute_class_weight(y_train: pd.Series) -> float:
     """Compute XGBoost scale_pos_weight to compensate for class imbalance.
 
     XGBoost uses ``scale_pos_weight = n_negative / n_positive`` to up-weight
-    the minority (fraud) class during training. This is the recommended approach
-    for imbalanced binary classification without resampling.
+    the minority (fraud) class during training. This is the recommended
+    approach for imbalanced binary classification without resampling.
 
     Args:
         y_train: Binary target series (0 = legit, 1 = fraud).
@@ -204,8 +205,13 @@ def filter_numeric_features(
 
     dropped = before - after
     logger.info(
-        "Feature filtering — total: %d | numeric: %d | dropped (non-numeric): %d",
-        before, after, dropped,
+        (
+            "Feature filtering — total: %d | numeric: %d | "
+            "dropped (non-numeric): %d"
+        ),
+        before,
+        after,
+        dropped,
     )
     if dropped:
         non_numeric = [c for c in X_train.columns if c not in numeric_cols]
@@ -245,7 +251,10 @@ def train_model(
         Fitted ``XGBClassifier`` instance.
     """
     logger.info(
-        "Training XGBoost — max_rounds: %d | early_stopping: %d | scale_pos_weight: %.4f",
+        (
+            "Training XGBoost — max_rounds: %d | early_stopping: %d | "
+            "scale_pos_weight: %.4f"
+        ),
         n_estimators,
         early_stopping_rounds,
         scale_pos_weight,
@@ -253,7 +262,8 @@ def train_model(
 
     model = XGBClassifier(
         objective="binary:logistic",
-        eval_metric="aucpr",          # PR-AUC: more informative than AUC for imbalanced data
+        # PR-AUC is more informative than ROC-AUC for imbalanced data.
+        eval_metric="aucpr",
         scale_pos_weight=scale_pos_weight,
         n_estimators=n_estimators,
         learning_rate=0.05,
@@ -287,6 +297,7 @@ def train_model(
     )
     return model
 
+
 def evaluate_model(
     model: XGBClassifier,
     X_test: pd.DataFrame,
@@ -300,7 +311,8 @@ def evaluate_model(
 
     Metrics computed:
     - ``roc_auc``:    ROC-AUC score.
-    - ``pr_auc``:     Precision-Recall AUC (primary metric for imbalanced data).
+    - ``pr_auc``:     Precision-Recall AUC
+      (primary metric for imbalanced data).
     - ``f1``:         F1-score at the given threshold.
     - ``precision``:  Precision at the given threshold.
     - ``recall``:     Recall (sensitivity) at the given threshold.
@@ -344,7 +356,10 @@ def evaluate_model(
     logger.info("MODEL EVALUATION REPORT")
     logger.info("=" * 60)
     logger.info("  ROC-AUC   : %.4f", roc_auc)
-    logger.info("  PR-AUC    : %.4f  ← primary metric (imbalanced data)", pr_auc)
+    logger.info(
+        "  PR-AUC    : %.4f  ← primary metric (imbalanced data)",
+        pr_auc,
+    )
     logger.info("  F1-Score  : %.4f", f1)
     logger.info("  Precision : %.4f", precision)
     logger.info("  Recall    : %.4f", recall)
@@ -356,6 +371,7 @@ def evaluate_model(
     logger.info("=" * 60)
 
     return metrics
+
 
 def get_feature_importance(
     model: XGBClassifier,
@@ -396,6 +412,7 @@ def get_feature_importance(
 
     return df
 
+
 def save_artifacts(
     model: XGBClassifier,
     metrics: dict[str, Any],
@@ -434,25 +451,30 @@ def save_artifacts(
     feature_importance.to_csv(fi_path, index=False)
     logger.info("Feature importance saved → %s", fi_path)
 
+
 def find_optimal_threshold(
     model: XGBClassifier,
     X_test: pd.DataFrame,
     y_test: pd.Series,
     min_recall: float = 0.95,
-    max_threshold: float = 0.7,      # ← thêm tham số này
+    max_threshold: float = 0.7,
 ) -> float:
     from sklearn.metrics import precision_recall_curve
+
     y_prob = model.predict_proba(X_test)[:, 1]
     precisions, recalls, thresholds = precision_recall_curve(y_test, y_prob)
 
-    # Áp dụng cả hai ràng buộc: recall >= min_recall VÀ threshold <= max_threshold
+    # Apply both constraints:
+    # recall >= min_recall and threshold <= max_threshold.
     valid_mask = (recalls[:-1] >= min_recall) & (thresholds <= max_threshold)
 
     if not valid_mask.any():
-        # Fallback: chỉ dùng ràng buộc recall, bỏ max_threshold
+        # Fallback to recall-only if max_threshold is too strict.
         logger.warning(
             "Không tìm được threshold <= %.2f với recall >= %.2f, "
-            "fallback sang recall-only", max_threshold, min_recall
+            "fallback sang recall-only",
+            max_threshold,
+            min_recall,
         )
         valid_mask = recalls[:-1] >= min_recall
 
@@ -464,6 +486,7 @@ def find_optimal_threshold(
 
     y_pred_opt = (y_prob >= optimal_threshold).astype(int)
     from sklearn.metrics import precision_score, recall_score, f1_score
+
     logger.info(
         "Optimal threshold: %.4f → Precision: %.4f | Recall: %.4f | F1: %.4f",
         optimal_threshold,
@@ -473,11 +496,11 @@ def find_optimal_threshold(
     )
     return optimal_threshold
 
+
 def run_training(
     processed_dir: str = "data/processed",
     models_dir: str = "models",
 ) -> dict[str, Any]:
-
     logger.info("=" * 60)
     logger.info("TCB FRAUD DETECTION — TRAINING PIPELINE START")
     logger.info("Processed data: %s", processed_dir)
@@ -485,7 +508,11 @@ def run_training(
     logger.info("=" * 60)
 
     train, test, feature_cols = load_data(processed_dir)
-    X_train, y_train, X_test, y_test = prepare_features(train, test, feature_cols)
+    X_train, y_train, X_test, y_test = prepare_features(
+        train,
+        test,
+        feature_cols,
+    )
     scale_pos_weight = compute_class_weight(y_train)
 
     # Drop non-numeric columns — XGBoost requires int/float/bool features
@@ -494,34 +521,51 @@ def run_training(
 
     with mlflow.start_run():
         # Log hyperparameters
-        mlflow.log_params({
-            "model_type": "xgboost",
-            "scale_pos_weight": round(scale_pos_weight, 4),
-            "max_depth": 6,
-            "learning_rate": 0.05,
-            "n_estimators": 1000,
-            "early_stopping_rounds": 50,
-            "eval_metric": "aucpr",
-            "feature_count": len(numeric_feature_cols),
-        })
+        mlflow.log_params(
+            {
+                "model_type": "xgboost",
+                "scale_pos_weight": round(scale_pos_weight, 4),
+                "max_depth": 6,
+                "learning_rate": 0.05,
+                "n_estimators": 1000,
+                "early_stopping_rounds": 50,
+                "eval_metric": "aucpr",
+                "feature_count": len(numeric_feature_cols),
+            }
+        )
 
         model = train_model(X_train, y_train, X_test, y_test, scale_pos_weight)
-        optimal_threshold = find_optimal_threshold(model, X_test, y_test, min_recall=0.95)
-        metrics = evaluate_model(model, X_test, y_test, threshold=optimal_threshold)
+        optimal_threshold = find_optimal_threshold(
+            model,
+            X_test,
+            y_test,
+            min_recall=0.95,
+        )
+        metrics = evaluate_model(
+            model,
+            X_test,
+            y_test,
+            threshold=optimal_threshold,
+        )
 
-        # Log thêm vào MLflow
+        # Log the selected operating threshold to MLflow.
         mlflow.log_param("decision_threshold", round(optimal_threshold, 4))
-        feature_importance = get_feature_importance(model, numeric_feature_cols)
+        feature_importance = get_feature_importance(
+            model,
+            numeric_feature_cols,
+        )
         save_artifacts(model, metrics, feature_importance, models_dir)
 
         # Log metrics to MLflow
-        mlflow.log_metrics({
-            "roc_auc": metrics["roc_auc"],
-            "pr_auc": metrics["pr_auc"],
-            "f1": metrics["f1"],
-            "precision": metrics["precision"],
-            "recall": metrics["recall"],
-        })
+        mlflow.log_metrics(
+            {
+                "roc_auc": metrics["roc_auc"],
+                "pr_auc": metrics["pr_auc"],
+                "f1": metrics["f1"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+            }
+        )
 
         # Log artifacts to MLflow
         out = Path(models_dir)
@@ -529,7 +573,10 @@ def run_training(
         mlflow.log_artifact(str(out / METRICS_FILENAME))
         mlflow.log_artifact(str(out / FEATURE_IMPORTANCE_FILENAME))
 
-        logger.info("MLflow run logged — run_id: %s", mlflow.active_run().info.run_id)
+        logger.info(
+            "MLflow run logged — run_id: %s",
+            mlflow.active_run().info.run_id,
+        )
 
     logger.info("=" * 60)
     logger.info("TRAINING PIPELINE COMPLETE")
