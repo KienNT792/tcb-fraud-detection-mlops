@@ -1,0 +1,39 @@
+name: Rollback Canary Traffic
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Rollout action
+        required: true
+        default: rollback
+        type: choice
+        options:
+          - rollback
+          - set-canary
+          - promote
+      percent:
+        description: Candidate traffic percent (for set-canary)
+        required: false
+        default: "10"
+
+jobs:
+  rollout-control:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute rollout control remotely
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            if [ "${{ inputs.action }}" = "set-canary" ]; then
+              python -m monitoring.simulator.rollout_ctl set-canary --percent "${{ inputs.percent }}"
+            elif [ "${{ inputs.action }}" = "promote" ]; then
+              python -m monitoring.simulator.rollout_ctl promote
+            else
+              python -m monitoring.simulator.rollout_ctl rollback
+            fi

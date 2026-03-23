@@ -1,0 +1,46 @@
+name: Deploy FastAPI Stack
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker image tag to deploy
+        required: true
+        default: latest
+      target_env:
+        description: Deployment environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_env || 'staging' }}
+    steps:
+      - name: Deploy on remote host
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            export IMAGE_TAG="${{ inputs.image_tag || github.sha }}"
+            docker compose pull fastapi-stable fastapi-candidate loadbalancer || true
+            docker compose up -d --build fastapi-stable fastapi-candidate loadbalancer
+
+      - name: Smoke test /health
+        run: |
+          curl --fail --retry 10 --retry-delay 6 "${{ secrets.SMOKE_BASE_URL }}/health"
+
+      - name: Smoke test /metrics
+        run: |
+          curl --fail --retry 10 --retry-delay 6 "${{ secrets.SMOKE_BASE_URL }}/metrics"

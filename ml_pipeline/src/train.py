@@ -33,6 +33,16 @@ import mlflow
 import mlflow.xgboost
 import numpy as np
 import pandas as pd
+try:
+    from .model_registry import (
+        register_model_from_run,
+        transition_model_version_stage,
+    )
+except ImportError:
+    from model_registry import (
+        register_model_from_run,
+        transition_model_version_stage,
+    )
 from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
@@ -613,9 +623,38 @@ def run_training(
 
         # Log artifacts to MLflow
         out = Path(models_dir)
-        mlflow.xgboost.log_model(model, "model")
+        model_info = mlflow.xgboost.log_model(model, "model")
         mlflow.log_artifact(str(out / METRICS_FILENAME))
         mlflow.log_artifact(str(out / FEATURE_IMPORTANCE_FILENAME))
+
+        if os.getenv("MLFLOW_REGISTER_MODEL", "true").lower() == "true":
+            model_name = os.getenv(
+                "MLFLOW_REGISTERED_MODEL_NAME",
+                "tcb-fraud-xgboost",
+            )
+            stage = os.getenv("MLFLOW_REGISTER_STAGE", "Staging")
+            run_id = mlflow.active_run().info.run_id
+            version = register_model_from_run(
+                run_id=run_id,
+                artifact_path="model",
+                model_name=model_name,
+            )
+            transition_model_version_stage(
+                model_name=model_name,
+                version=version,
+                stage=stage,
+                archive_existing_versions=True,
+            )
+            mlflow.set_tag("registry.model_name", model_name)
+            mlflow.set_tag("registry.version", str(version))
+            mlflow.set_tag("registry.stage", stage)
+            logger.info(
+                "MLflow model registry updated | model=%s | version=%s | stage=%s | uri=%s",
+                model_name,
+                version,
+                stage,
+                model_info.model_uri,
+            )
 
         logger.info(
             "MLflow run logged — run_id: %s",

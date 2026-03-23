@@ -1,0 +1,82 @@
+groups:
+  - name: fraud-api-alerts
+    rules:
+      - alert: FraudApiDown
+        expr: up{job=~"fastapi-stable|fastapi-candidate"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fraud API instance is down"
+          description: "Prometheus cannot scrape {{ $labels.job }} for 2 minutes."
+
+      - alert: FraudApiHighErrorRate
+        expr: |
+          (
+            sum(rate(tcb_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(tcb_http_requests_total[5m])), 0.001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate on fraud API"
+          description: "5xx ratio is above 5% over the last 5 minutes."
+
+      - alert: FraudApiHighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(tcb_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fraud API high latency"
+          description: "P95 request latency is above 1 second for 10 minutes."
+
+      - alert: FraudModelNotLoaded
+        expr: min(tcb_model_loaded) < 1
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fraud model is not loaded"
+          description: "At least one API instance reports tcb_model_loaded=0."
+
+      - alert: FraudDriftRatioHigh
+        expr: max(tcb_drift_ratio) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data drift ratio is high"
+          description: "Detected feature drift ratio is above 0.20 for 10 minutes."
+
+  - name: fraud-canary-alerts
+    rules:
+      - alert: CandidateModelBehaviorRegression
+        expr: |
+          (
+            rate(tcb_prediction_samples_total{job="fastapi-candidate"}[10m]) > 0.05
+          )
+          and
+          (
+            rate(tcb_prediction_fraud_total{job="fastapi-candidate"}[10m])
+            /
+            clamp_min(rate(tcb_prediction_samples_total{job="fastapi-candidate"}[10m]), 0.001)
+            <
+            (
+              rate(tcb_prediction_fraud_total{job="fastapi-stable"}[10m])
+              /
+              clamp_min(rate(tcb_prediction_samples_total{job="fastapi-stable"}[10m]), 0.001)
+            ) * 0.7
+          )
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Candidate model behavior deviates from stable"
+          description: "Candidate fraud prediction rate is significantly below stable baseline for 15 minutes."

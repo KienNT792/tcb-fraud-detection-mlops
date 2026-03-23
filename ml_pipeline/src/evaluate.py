@@ -15,6 +15,16 @@ import shap
 import matplotlib
 matplotlib.use("Agg")   # non-interactive backend — safe for server/CI
 import matplotlib.pyplot as plt
+try:
+    from .model_registry import (
+        find_latest_version_by_run,
+        transition_model_version_stage,
+    )
+except ImportError:
+    from model_registry import (
+        find_latest_version_by_run,
+        transition_model_version_stage,
+    )
 
 from sklearn.metrics import (
     average_precision_score,
@@ -537,6 +547,40 @@ def run_evaluation(
         })
         mlflow.set_tag("evaluation_status", comparison["status"])
         mlflow.set_tag("min_recall_target", str(min_recall))
+
+        if (
+            comparison["status"] == "PASS"
+            and os.getenv("MLFLOW_AUTO_PROMOTE_ON_PASS", "false").lower() == "true"
+        ):
+            model_name = os.getenv(
+                "MLFLOW_REGISTERED_MODEL_NAME",
+                "tcb-fraud-xgboost",
+            )
+            target_stage = os.getenv("MLFLOW_PROMOTE_STAGE", "Production")
+            source_run_id = os.getenv("MLFLOW_SOURCE_RUN_ID", "").strip()
+            version = (
+                find_latest_version_by_run(
+                    model_name=model_name,
+                    run_id=source_run_id,
+                )
+                if source_run_id
+                else None
+            )
+            if version is not None:
+                transition_model_version_stage(
+                    model_name=model_name,
+                    version=version,
+                    stage=target_stage,
+                    archive_existing_versions=True,
+                )
+                mlflow.set_tag("registry.promoted", "true")
+                mlflow.set_tag("registry.promoted_stage", target_stage)
+            else:
+                logger.warning(
+                    "No registered model version found for source_run_id=%s and model=%s.",
+                    source_run_id or "<empty>",
+                    model_name,
+                )
 
         for artifact_file in [
             "evaluation.json",

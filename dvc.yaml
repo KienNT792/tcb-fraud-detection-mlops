@@ -1,0 +1,39 @@
+stages:
+  preprocess:
+    cmd: python -m ml_pipeline.src.preprocess
+    deps:
+      - ml_pipeline/src/preprocess.py
+      - data/raw/tcb_credit_fraud_dataset.csv
+    outs:
+      - data/processed/train.parquet
+      - data/processed/test.parquet
+      - data/processed/features.json
+      - data/processed/customer_stats.parquet
+      - data/processed/segment_label_map.json
+      - data/processed/amount_median_train.json
+      - data/processed/categorical_maps.json
+  train:
+    cmd: python -m ml_pipeline.src.train
+    deps:
+      - ml_pipeline/src/train.py
+      - data/processed/train.parquet
+      - data/processed/test.parquet
+      - data/processed/features.json
+    outs:
+      - models/xgb_fraud_model.joblib
+      - models/metrics.json
+      - models/feature_importance.csv
+  evaluate:
+    cmd: python -m ml_pipeline.src.evaluate
+    deps:
+      - ml_pipeline/src/evaluate.py
+      - models/xgb_fraud_model.joblib
+      - models/metrics.json
+      - data/processed/test.parquet
+      - data/processed/features.json
+    outs:
+      - models/evaluation/evaluation.json
+      - models/evaluation/segment_report.csv
+      - models/evaluation/pr_curve.png
+      - models/evaluation/shap_summary.png
+      - models/evaluation/shap_waterfall.png
