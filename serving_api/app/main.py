@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import Any, AsyncGenerator
 
 import pandas as pd
@@ -18,11 +19,15 @@ except ImportError:  # pragma: no cover - local dev without optional dependency
 from .model_loader import (
     API_VERSION,
     get_detector,
+    get_runtime_info,
     load_model,
+    reload_model,
     unload_model,
 )
 from .observability import (
     bootstrap_observability,
+    get_drift_alert_threshold,
+    get_drift_snapshot,
     record_http_observation,
     record_prediction_observation,
     shutdown_observability,
@@ -31,6 +36,8 @@ from .schemas import (
     BatchPredictionItem,
     BatchPredictionResponse,
     BatchTransactionRequest,
+    DeploymentResponse,
+    DriftStatusResponse,
     ErrorResponse,
     HealthResponse,
     PredictionResponse,
@@ -45,21 +52,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_optional_detector():
+    return get_detector(required=False)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Load model artifacts at startup, release at shutdown."""
     logger.info("=" * 50)
     logger.info("TCB FRAUD DETECTION API — STARTING UP")
     logger.info("=" * 50)
     try:
         detector = load_model()
         bootstrap_observability(detector)
-        logger.info("Model loaded successfully. API ready.")
+        if detector is None:
+            logger.warning("No model loaded at startup. Service is in standby mode.")
+        else:
+            logger.info("Model loaded successfully. API ready.")
     except FileNotFoundError as exc:
         logger.error("STARTUP FAILED — artifact missing: %s", exc)
         raise
 
-    yield  # API is live and serving requests
+    yield
 
     logger.info("Shutting down — releasing model.")
     shutdown_observability()
@@ -70,9 +83,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="TCB Fraud Detection API",
     description=(
-        "Real-time credit card fraud scoring using XGBoost. "
-        "Accepts raw transaction data and returns a fraud probability score, "
-        "binary prediction, and risk level classification."
+        "Real-time credit card fraud scoring using XGBoost with deployment "
+        "metadata, drift monitoring, and reload hooks for canary rollout."
     ),
     version=API_VERSION,
     lifespan=lifespan,
@@ -96,7 +108,6 @@ else:
         "Prometheus instrumentation disabled: dependency not installed."
     )
 
-# CORS — allow all origins in development; restrict in production
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -157,13 +168,8 @@ async def runtime_error_handler(
     )
 
 
-@app.get(
-    "/",
-    summary="API info",
-    tags=["Info"],
-)
+@app.get("/", summary="API info", tags=["Info"])
 async def root() -> dict[str, str]:
-    """Return basic API metadata."""
     return {
         "name": "TCB Fraud Detection API",
         "version": API_VERSION,
@@ -171,6 +177,9 @@ async def root() -> dict[str, str]:
         "health": "/health",
         "predict": "POST /predict",
         "batch": "POST /predict/batch",
+        "deployment": "/deployment",
+        "drift": "/monitoring/drift",
+        "reload": "POST /admin/reload",
     }
 
 
@@ -180,12 +189,26 @@ async def root() -> dict[str, str]:
     summary="Model health check",
     tags=["Health"],
 )
-async def health(detector=Depends(get_detector)) -> HealthResponse:
-    """Return model health status and metadata.
+async def health(
+    detector=Depends(get_optional_detector),
+) -> HealthResponse:
+    runtime = get_runtime_info()
 
-    Use this endpoint for liveness/readiness probes in Kubernetes or
-    any container orchestration system.
-    """
+    if detector is None:
+        return HealthResponse(
+            status="EMPTY" if runtime["allow_empty_model"] else "ERROR",
+            model_type="UNLOADED",
+            feature_count=0,
+            threshold=None,
+            best_iteration=None,
+            loaded_at=runtime["loaded_at"],
+            api_version=API_VERSION,
+            model_slot=runtime["model_slot"],
+            model_version=runtime["model_version"],
+            model_loaded=False,
+            load_error=runtime["load_error"],
+        )
+
     info = detector.health_check()
     return HealthResponse(
         status=info["status"],
@@ -195,7 +218,56 @@ async def health(detector=Depends(get_detector)) -> HealthResponse:
         best_iteration=info["best_iteration"],
         loaded_at=info["loaded_at"],
         api_version=API_VERSION,
+        model_slot=runtime["model_slot"],
+        model_version=runtime["model_version"],
+        model_loaded=True,
+        load_error=runtime["load_error"],
     )
+
+
+@app.get(
+    "/deployment",
+    response_model=DeploymentResponse,
+    summary="Deployment metadata",
+    tags=["Deployment"],
+)
+async def deployment_info() -> DeploymentResponse:
+    return DeploymentResponse(**get_runtime_info())
+
+
+@app.get(
+    "/monitoring/drift",
+    response_model=DriftStatusResponse,
+    summary="Current drift monitor snapshot",
+    tags=["Monitoring"],
+)
+async def drift_status() -> DriftStatusResponse:
+    snapshot = asdict(get_drift_snapshot())
+    snapshot["alert_threshold"] = get_drift_alert_threshold()
+    return DriftStatusResponse(**snapshot)
+
+
+@app.post(
+    "/admin/reload",
+    response_model=DeploymentResponse,
+    summary="Reload model artifacts from disk",
+    tags=["Admin"],
+)
+async def admin_reload() -> JSONResponse:
+    try:
+        detector = reload_model()
+        bootstrap_observability(detector)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Reload failed: {exc}",
+        ) from exc
+
+    runtime = DeploymentResponse(**get_runtime_info()).model_dump()
+    response_code = (
+        status.HTTP_200_OK if runtime["model_loaded"] else status.HTTP_202_ACCEPTED
+    )
+    return JSONResponse(status_code=response_code, content=runtime)
 
 
 @app.post(
@@ -213,15 +285,6 @@ async def predict(
     request: TransactionRequest,
     detector=Depends(get_detector),
 ) -> PredictionResponse:
-    """Score a single raw transaction and return a fraud probability.
-
-    The request body must include all required fields (transaction_id,
-    timestamp, customer_id, amount, customer_tier). Optional behavioural
-    fields default to 0 / N/A when absent.
-
-    Returns a fraud_score in [0, 1], a binary is_fraud_pred flag based on
-    the optimal threshold, and a risk_level classification.
-    """
     payload = request.model_dump()
     try:
         result = detector.predict_single(payload)
@@ -265,18 +328,8 @@ async def predict_batch(
     request: BatchTransactionRequest,
     detector=Depends(get_detector),
 ) -> BatchPredictionResponse:
-    """Score up to 1000 transactions in a single request.
-
-    Accepts a JSON body with a ``transactions`` list. Each item follows the
-    same schema as the single ``/predict`` endpoint.
-
-    Returns aggregated stats (total, fraud_detected, fraud_rate) plus a
-    per-transaction predictions list.
-    """
     try:
-        raw_df = pd.DataFrame(
-            [tx.model_dump() for tx in request.transactions]
-        )
+        raw_df = pd.DataFrame([tx.model_dump() for tx in request.transactions])
         results_df = detector.predict_batch(raw_df)
     except Exception as exc:
         logger.exception(

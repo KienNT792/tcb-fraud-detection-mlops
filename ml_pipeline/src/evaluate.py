@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,47 @@ _REGRESSION_TOLERANCE: dict[str, float] = {
     "f1":        0.03,   # F1 không được giảm quá 3 điểm
     "recall":    0.02,   # Recall không được giảm quá 2 điểm
 }
+DEFAULT_EXPERIMENT_NAME = "fraud-detection-training-pipeline"
+
+
+def configure_mlflow(stage: str) -> str:
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+    if tracking_uri:
+        mlflow.set_tracking_uri(tracking_uri)
+
+    experiment_name = os.getenv(
+        "MLFLOW_EXPERIMENT_NAME",
+        DEFAULT_EXPERIMENT_NAME,
+    )
+    mlflow.set_experiment(experiment_name)
+
+    run_name = os.getenv("MLFLOW_RUN_NAME")
+    if run_name:
+        return run_name
+
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stage}-{timestamp}"
+
+
+def build_mlflow_tags(
+    stage: str,
+    models_dir: str,
+    processed_dir: str,
+    evaluation_dir: str,
+) -> dict[str, str]:
+    tags = {
+        "pipeline.stage": stage,
+        "pipeline.source": os.getenv("PIPELINE_SOURCE", "manual"),
+        "pipeline.run_id": os.getenv("PIPELINE_RUN_ID", ""),
+        "airflow.dag_id": os.getenv("AIRFLOW_PIPELINE_DAG_ID", ""),
+        "airflow.task_id": os.getenv("AIRFLOW_PIPELINE_TASK_ID", ""),
+        "airflow.run_id": os.getenv("AIRFLOW_PIPELINE_RUN_ID", ""),
+        "airflow.logical_date": os.getenv("AIRFLOW_PIPELINE_LOGICAL_DATE", ""),
+        "artifact.models_dir": models_dir,
+        "artifact.processed_dir": processed_dir,
+        "artifact.evaluation_dir": evaluation_dir,
+    }
+    return {key: value for key, value in tags.items() if value}
 
 def load_artifacts(
     models_dir: str,
@@ -431,6 +473,7 @@ def run_evaluation(
 
     out = Path(evaluation_dir)
     out.mkdir(parents=True, exist_ok=True)
+    run_name = configure_mlflow("evaluation")
 
     # Step 1 — Load
     model, X_test, y_test, feature_cols, baseline_metrics = load_artifacts(
@@ -440,7 +483,24 @@ def run_evaluation(
     # Load full test DF for segment analysis (needs segment_encoded column)
     test_df = pd.read_parquet(Path(processed_dir) / "test.parquet")
 
-    with mlflow.start_run(run_name="evaluation"):
+    with mlflow.start_run(run_name=run_name):
+        mlflow.set_tags(
+            build_mlflow_tags(
+                "evaluation",
+                models_dir,
+                processed_dir,
+                evaluation_dir,
+            )
+        )
+        mlflow.log_params(
+            {
+                "models_dir": models_dir,
+                "processed_dir": processed_dir,
+                "evaluation_dir": evaluation_dir,
+                "min_recall": min_recall,
+                "max_threshold": max_threshold,
+            }
+        )
 
         # Step 2 — Threshold analysis
         threshold_metrics = evaluate_threshold(
@@ -512,7 +572,16 @@ def run_evaluation(
 
 if __name__ == "__main__":
     project_root = Path(__file__).resolve().parent.parent.parent
-    _models    = str(project_root / "models")
-    _processed = str(project_root / "data" / "processed")
-    _eval_dir  = str(project_root / "models" / "evaluation")
+    _models = os.getenv(
+        "MODELS_DIR",
+        str(project_root / "models"),
+    )
+    _processed = os.getenv(
+        "PROCESSED_DIR",
+        str(project_root / "data" / "processed"),
+    )
+    _eval_dir = os.getenv(
+        "EVALUATION_DIR",
+        str(Path(_models) / "evaluation"),
+    )
     run_evaluation(_models, _processed, _eval_dir)
