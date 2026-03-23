@@ -197,11 +197,42 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="OK | DEGRADED | ERROR")
     model_type: str
     feature_count: int
-    threshold: float
-    best_iteration: int
-    loaded_at: str
+    threshold: float | None = None
+    best_iteration: int | None = None
+    loaded_at: str | None = None
     api_version: str
+    model_slot: str
+    model_version: str | None = None
+    model_loaded: bool
+    load_error: str | None = None
     model_config = {"protected_namespaces": ()}
+
+
+class DeploymentResponse(BaseModel):
+    model_slot: str
+    model_loaded: bool
+    model_version: str | None = None
+    models_dir: str
+    processed_dir: str
+    allow_empty_model: bool
+    load_error: str | None = None
+    loaded_at: str | None = None
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    model_config = {"protected_namespaces": ()}
+
+
+class DriftStatusResponse(BaseModel):
+    ready: bool
+    reference_mode: str
+    reference_samples: int
+    current_samples: int
+    features_total: int
+    features_alerting: int
+    overall_score: float
+    drift_ratio: float
+    reason: str
+    alert_threshold: float
+    feature_scores: dict[str, float] = Field(default_factory=dict)
 
 
 class ErrorResponse(BaseModel):

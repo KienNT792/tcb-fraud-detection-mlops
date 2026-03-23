@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,45 @@ _IDENTIFIER_COLS: frozenset[str] = frozenset(
 MODEL_FILENAME = "xgb_fraud_model.joblib"
 METRICS_FILENAME = "metrics.json"
 FEATURE_IMPORTANCE_FILENAME = "feature_importance.csv"
+DEFAULT_EXPERIMENT_NAME = "fraud-detection-training-pipeline"
+
+
+def configure_mlflow(stage: str) -> str:
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+    if tracking_uri:
+        mlflow.set_tracking_uri(tracking_uri)
+
+    experiment_name = os.getenv(
+        "MLFLOW_EXPERIMENT_NAME",
+        DEFAULT_EXPERIMENT_NAME,
+    )
+    mlflow.set_experiment(experiment_name)
+
+    run_name = os.getenv("MLFLOW_RUN_NAME")
+    if run_name:
+        return run_name
+
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stage}-{timestamp}"
+
+
+def build_mlflow_tags(
+    stage: str,
+    processed_dir: str,
+    models_dir: str,
+) -> dict[str, str]:
+    tags = {
+        "pipeline.stage": stage,
+        "pipeline.source": os.getenv("PIPELINE_SOURCE", "manual"),
+        "pipeline.run_id": os.getenv("PIPELINE_RUN_ID", ""),
+        "airflow.dag_id": os.getenv("AIRFLOW_PIPELINE_DAG_ID", ""),
+        "airflow.task_id": os.getenv("AIRFLOW_PIPELINE_TASK_ID", ""),
+        "airflow.run_id": os.getenv("AIRFLOW_PIPELINE_RUN_ID", ""),
+        "airflow.logical_date": os.getenv("AIRFLOW_PIPELINE_LOGICAL_DATE", ""),
+        "artifact.processed_dir": processed_dir,
+        "artifact.models_dir": models_dir,
+    }
+    return {key: value for key, value in tags.items() if value}
 
 
 # Step 1 — Load Processed Data
@@ -518,8 +558,10 @@ def run_training(
     # Drop non-numeric columns — XGBoost requires int/float/bool features
     X_train, X_test = filter_numeric_features(X_train, X_test)
     numeric_feature_cols: list[str] = X_train.columns.tolist()
+    run_name = configure_mlflow("train")
 
-    with mlflow.start_run():
+    with mlflow.start_run(run_name=run_name):
+        mlflow.set_tags(build_mlflow_tags("train", processed_dir, models_dir))
         # Log hyperparameters
         mlflow.log_params(
             {
@@ -531,6 +573,8 @@ def run_training(
                 "early_stopping_rounds": 50,
                 "eval_metric": "aucpr",
                 "feature_count": len(numeric_feature_cols),
+                "processed_dir": processed_dir,
+                "models_dir": models_dir,
             }
         )
 
@@ -593,6 +637,12 @@ def run_training(
 
 if __name__ == "__main__":
     project_root = Path(__file__).resolve().parent.parent.parent
-    _processed = str(project_root / "data" / "processed")
-    _models = str(project_root / "models")
+    _processed = os.getenv(
+        "PROCESSED_DIR",
+        str(project_root / "data" / "processed"),
+    )
+    _models = os.getenv(
+        "MODELS_DIR",
+        str(project_root / "models"),
+    )
     run_training(_processed, _models)

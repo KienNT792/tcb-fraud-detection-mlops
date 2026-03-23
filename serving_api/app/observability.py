@@ -131,7 +131,11 @@ _REFERENCE_MODES = ("train_parquet", "warmup_window", "missing")
 _DRIFT_MONITOR = DriftMonitor(processed_dir=PROCESSED_DIR)
 
 
-def bootstrap_observability(detector: Any) -> None:
+def bootstrap_observability(detector: Any | None) -> None:
+    if detector is None:
+        MODEL_LOADED.set(0)
+        return
+
     MODEL_LOADED.set(1)
 
     threshold = getattr(detector, "_threshold", None)
@@ -224,6 +228,14 @@ def record_prediction_observation(
     _apply_drift_snapshot(
         _DRIFT_MONITOR.observe(raw_df=raw_df, detector=detector)
     )
+
+
+def get_drift_snapshot() -> DriftSnapshot:
+    return _DRIFT_MONITOR.snapshot()
+
+
+def get_drift_alert_threshold() -> float:
+    return _DRIFT_MONITOR.alert_threshold
 
 
 def _apply_drift_snapshot(snapshot: DriftSnapshot) -> None:

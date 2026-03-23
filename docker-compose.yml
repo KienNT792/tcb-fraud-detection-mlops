@@ -1,26 +1,82 @@
+x-fastapi-image: &fastapi-image
+  build:
+    context: .
+    dockerfile: serving_api/Dockerfile
+  image: tcb-fraud-fastapi:${IMAGE_TAG:-local}
+
+x-fastapi-base: &fastapi-base
+  <<: *fastapi-image
+  env_file:
+    - .env
+  environment:
+    PROCESSED_DIR: /app/data/processed
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+  volumes:
+    - ./models:/app/models
+    - ./data/processed:/app/data/processed:ro
+  depends_on:
+    mlflow:
+      condition: service_started
+    minio-init:
+      condition: service_completed_successfully
+  networks:
+    - mlops
+  restart: unless-stopped
+
 services:
-  fastapi:
-    build:
-      context: .
-      dockerfile: serving_api/Dockerfile
-    image: tcb-fraud-fastapi:${IMAGE_TAG:-local}
-    container_name: tcb-fastapi
-    env_file:
-      - .env
+  fastapi-stable:
+    <<: *fastapi-base
+    container_name: tcb-fastapi-stable
     environment:
       MODELS_DIR: /app/models
       PROCESSED_DIR: /app/data/processed
+      MODEL_SLOT: stable
+      ALLOW_EMPTY_MODEL: "false"
       MLFLOW_TRACKING_URI: http://mlflow:5000
+    expose:
+      - "8000"
+    ports:
+      - "127.0.0.1:${FASTAPI_STABLE_PORT:-8002}:8000"
+
+  fastapi-candidate:
+    <<: *fastapi-base
+    container_name: tcb-fastapi-candidate
+    environment:
+      MODELS_DIR: /app/models/deployments/candidate
+      PROCESSED_DIR: /app/data/processed
+      MODEL_SLOT: candidate
+      ALLOW_EMPTY_MODEL: "true"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    expose:
+      - "8000"
+    ports:
+      - "127.0.0.1:${FASTAPI_CANDIDATE_PORT:-8003}:8000"
+
+  loadbalancer:
+    image: nginx:1.27-alpine
+    container_name: tcb-loadbalancer
     ports:
       - "${FASTAPI_PORT:-8000}:8000"
     volumes:
-      - ./models:/app/models
-      - ./data/processed:/app/data/processed:ro
+      - ./monitoring/loadbalancer/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./monitoring/loadbalancer/canary_split.conf:/etc/nginx/conf.d/canary_split.conf:ro
     depends_on:
-      mlflow:
+      fastapi-stable:
         condition: service_started
-      minio-init:
-        condition: service_completed_successfully
+      fastapi-candidate:
+        condition: service_started
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    container_name: tcb-nginx-exporter
+    command:
+      - --nginx.scrape-uri=http://loadbalancer:18080/nginx_status
+    depends_on:
+      loadbalancer:
+        condition: service_started
     networks:
       - mlops
     restart: unless-stopped
@@ -88,7 +144,16 @@ services:
     image: apache/airflow:2.10.3-python3.10
     container_name: tcb-airflow
     user: "${AIRFLOW_UID:-50000}:0"
-    command: standalone
+    command: >
+      bash -lc "
+      if [ ! -x /opt/airflow/venv/bin/python ]; then
+        python -m venv --system-site-packages /opt/airflow/venv;
+      fi &&
+      /opt/airflow/venv/bin/python -m pip install --no-cache-dir -r /opt/airflow/project/ml_pipeline/requirements-airflow.txt &&
+      export PATH=/opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin:$$PATH &&
+      export PYTHONPATH=/home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project:$$PYTHONPATH &&
+      exec airflow standalone
+      "
     env_file:
       - .env
     environment:
@@ -96,11 +161,15 @@ services:
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
-      PIP_ADDITIONAL_REQUIREMENTS: >-
-        -r /opt/airflow/project/ml_pipeline/requirements.txt
+      AIRFLOW_VENV_PYTHON: /opt/airflow/venv/bin/python
+      PATH: /opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin
+      PYTHONPATH: /home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project
       PROJECT_ROOT: /opt/airflow/project
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: fraud-detection-training-pipeline
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MODEL_QUALITY_METRIC: eval_f1
+      MODEL_QUALITY_THRESHOLD: "0.80"
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
     ports:
@@ -130,7 +199,9 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./volumes/prometheus:/prometheus
     depends_on:
-      - fastapi
+      - fastapi-stable
+      - fastapi-candidate
+      - nginx-exporter
       - node-exporter
       - cadvisor
     networks:

@@ -111,6 +111,9 @@ def client():
     """TestClient with mocked FraudDetector injected via dependency override."""
     mock_detector = make_mock_detector()
     app.dependency_overrides[main_module.get_detector] = lambda: mock_detector
+    app.dependency_overrides[main_module.get_optional_detector] = (
+        lambda: mock_detector
+    )
 
     with patch.object(main_module, "load_model"), patch.object(main_module, "unload_model"):
         with TestClient(app, raise_server_exceptions=True) as c:
@@ -158,7 +161,8 @@ class TestHealth:
         c, _ = client
         data = c.get("/health").json()
         for field in ("status", "model_type", "feature_count", "threshold",
-                      "best_iteration", "loaded_at", "api_version"):
+                      "best_iteration", "loaded_at", "api_version",
+                      "model_slot", "model_loaded"):
             assert field in data, f"Missing field: {field}"
 
     def test_feature_count_positive(self, client):
@@ -170,6 +174,19 @@ class TestHealth:
         c, _ = client
         data = c.get("/health").json()
         assert 0 < data["threshold"] < 1
+
+
+class TestDeployment:
+    def test_returns_200(self, client):
+        c, _ = client
+        resp = c.get("/deployment")
+        assert resp.status_code == 200
+
+    def test_contains_runtime_fields(self, client):
+        c, _ = client
+        data = c.get("/deployment").json()
+        for field in ("model_slot", "model_loaded", "models_dir", "processed_dir"):
+            assert field in data, f"Missing field: {field}"
 
 
 # ---------------------------------------------------------------------------
