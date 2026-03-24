@@ -2,7 +2,7 @@ x-fastapi-image: &fastapi-image
   build:
     context: .
     dockerfile: serving_api/Dockerfile
-  image: tcb-fraud-fastapi:${IMAGE_TAG:-local}
+  image: tungb12ok/tcb-detect-credit:${IMAGE_TAG:-latest}
 
 x-fastapi-base: &fastapi-base
   <<: *fastapi-image

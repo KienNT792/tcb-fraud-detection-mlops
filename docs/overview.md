@@ -36,7 +36,7 @@ Chạy trên `push` vào `main` và `pull_request`:
 - cài dependency
 - chạy lint
 - chạy test với coverage gate `>= 80%`
-- build Docker image của FastAPI
+- build và push Docker image của FastAPI lên Docker Hub
 
 ### CD
 
@@ -45,8 +45,10 @@ Chỉ chạy khi `push` lên branch deploy:
 - validate config deploy
 - GitHub Actions SSH vào VPS
 - VPS clone/fetch/pull chính repo này
+- VPS `docker login` vào Docker Hub
+- VPS `docker compose pull`
 - tạo `.env` từ `.env.example` nếu chưa có
-- chạy `docker compose up -d --build`
+- chạy `docker compose up -d --no-build`
 - chạy health check cho FastAPI, MLflow, Airflow, Grafana
 
 ## 4. Các key và config cần có
@@ -55,6 +57,8 @@ Chỉ chạy khi `push` lên branch deploy:
 
 - `SSH_DEPLOY_KEY`:
   private SSH key dùng để GitHub Actions SSH vào VPS
+- `DOCKERHUB_TOKEN`:
+  Docker Hub access token để push image trong CI và pull image trên VPS
 - `GCP_DEPLOY_HOST`:
   IP hoặc domain của VPS
 - `GCP_DEPLOY_USER`:
@@ -64,6 +68,7 @@ Ghi nhớ:
 
 - `SSH_DEPLOY_KEY` phải là private key, thường bắt đầu bằng `-----BEGIN OPENSSH PRIVATE KEY-----`
 - public key tương ứng phải nằm trong `~/.ssh/authorized_keys` trên VPS
+- image deploy hiện được hardcode là `tungb12ok/tcb-detect-credit`
 
 ## 5. Cấu hình môi trường trên VPS
 
