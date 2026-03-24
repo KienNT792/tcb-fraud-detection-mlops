@@ -74,13 +74,13 @@ jobs:
       DEPLOY_PATH: /opt/tcb-fraud-detection-mlops
       DEPLOY_REF: ${{ github.ref_name }}
       IMAGE_TAG: ${{ github.ref_name }}-${{ github.run_number }}
+      DEPLOY_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
 
     steps:
       - name: Validate deploy configuration
         env:
           DEPLOY_HOST: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
-          DEPLOY_REPO_URL: ${{ secrets.GIT_REPO_URL || vars.GIT_REPO_URL }}
           DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
         run: |
           set -euo pipefail
@@ -95,11 +95,6 @@ jobs:
             exit 1
           fi
 
-          if [ -z "${DEPLOY_REPO_URL}" ]; then
-            echo "Missing repo URL. Set GIT_REPO_URL in GitHub Secrets or Variables."
-            exit 1
-          fi
-
           if [ -z "${DEPLOY_SSH_KEY}" ]; then
             echo "Missing SSH key. Set SSH_DEPLOY_KEY in GitHub Secrets."
             exit 1
@@ -109,27 +104,50 @@ jobs:
 
       - name: Deploy to Google Cloud VPS
         uses: appleboy/ssh-action@v1
+        env:
+          GIT_AUTH_TOKEN: ${{ secrets.GIT_AUTH_TOKEN }}
         with:
           host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
           username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
           # SSH_DEPLOY_KEY must contain the private key content.
           # Install the matching public key in ~/.ssh/authorized_keys on the VPS.
           key: ${{ secrets.SSH_DEPLOY_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG
+          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DEPLOY_REPO_URL,GIT_AUTH_TOKEN
           script: |
             set -euo pipefail
 
             mkdir -p $DEPLOY_PATH
             cd $DEPLOY_PATH
 
-            # Clone repo nếu chưa có, hoặc fetch + pull
-            if [ ! -d .git ]; then
-              git clone ${{ secrets.GIT_REPO_URL || vars.GIT_REPO_URL }} .
+            if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
+              GIT_BASIC_AUTH=$(printf 'x-access-token:%s' "$GIT_AUTH_TOKEN" | base64 | tr -d '\n')
+              GIT_HTTP_HEADER="AUTHORIZATION: basic ${GIT_BASIC_AUTH}"
+              echo "Using HTTPS token authentication for Git operations."
+            else
+              GIT_HTTP_HEADER=""
+              echo "GIT_AUTH_TOKEN is not set. Using anonymous HTTPS Git access."
             fi
 
-            git fetch --all --prune
+            # Clone repo nếu chưa có, hoặc fetch + pull
+            if [ ! -d .git ]; then
+              if [ -n "$GIT_HTTP_HEADER" ]; then
+                git -c http.extraHeader="$GIT_HTTP_HEADER" clone "$DEPLOY_REPO_URL" .
+              else
+                git clone "$DEPLOY_REPO_URL" .
+              fi
+            fi
+
+            if [ -n "$GIT_HTTP_HEADER" ]; then
+              git -c http.extraHeader="$GIT_HTTP_HEADER" fetch --all --prune
+            else
+              git fetch --all --prune
+            fi
             git checkout $DEPLOY_REF
-            git pull origin $DEPLOY_REF
+            if [ -n "$GIT_HTTP_HEADER" ]; then
+              git -c http.extraHeader="$GIT_HTTP_HEADER" pull origin $DEPLOY_REF
+            else
+              git pull origin $DEPLOY_REF
+            fi
 
             # Tạo .env từ .env.example nếu chưa tồn tại
             if [ ! -f .env ]; then
