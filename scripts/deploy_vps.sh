@@ -5,6 +5,7 @@ set -euo pipefail
 DEPLOY_PATH_INPUT="${DEPLOY_PATH:-tcb-fraud-detection-mlops}"
 DEPLOY_REF="${DEPLOY_REF:-main}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
+DEPLOY_IMAGE_TAG="$IMAGE_TAG"
 DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-}"
 DEPLOY_ENV_B64="${DEPLOY_ENV_B64:-}"
 DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-tungb12ok}"
@@ -118,7 +119,7 @@ fi
 
 echo "Deploy path: $DEPLOY_PATH"
 echo "Branch: $DEPLOY_REF"
-echo "Image tag: $IMAGE_TAG"
+echo "Image tag: $DEPLOY_IMAGE_TAG"
 echo "Git remote: ${GIT_REMOTE_URL:-<existing remote>}"
 echo "SSH user: $(id -un)"
 echo "HOME: ${HOME:-<unset>}"
@@ -144,6 +145,11 @@ sync_runtime_env_file
 set -a
 . ./.env
 set +a
+
+# Keep the immutable image tag passed from the workflow.
+# Local .env may keep IMAGE_TAG=local for development, but CD must deploy the pushed SHA tag.
+IMAGE_TAG="$DEPLOY_IMAGE_TAG"
+export IMAGE_TAG
 
 required_env_vars=(
   MINIO_ROOT_USER
