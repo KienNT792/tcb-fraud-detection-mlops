@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY serving_api/requirements.txt /tmp/requirements.txt
-RUN pip wheel --wheel-dir /wheels -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --wheel-dir /wheels -r /tmp/requirements.txt
 
 
 FROM python:3.10-slim AS runtime
@@ -20,7 +21,8 @@ ENV MODELS_DIR=/app/models \
     PROCESSED_DIR=/app/data/processed \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 

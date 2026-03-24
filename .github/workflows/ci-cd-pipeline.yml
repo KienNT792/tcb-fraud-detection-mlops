@@ -59,7 +59,7 @@ jobs:
           push: false
           tags: tcb-fraud-fastapi:${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
 
   # ---------------------------------------------------------------------------
   # CD — Deploy to Google Cloud VPS (only on push to main or dev/ver2)
