@@ -33,9 +33,48 @@ Nếu repo là private hoặc bạn muốn dùng auth ổn định thay vì anon
 
 Ví dụ cho Ubuntu:
 
+Bạn có thể dùng script có sẵn trong repo:
+
+```bash
+sudo bash scripts/setup_vps_prereqs.sh <deploy-user> <deploy-path>
+```
+
+Ví dụ:
+
+```bash
+sudo bash scripts/setup_vps_prereqs.sh ubuntu /opt/tcb-fraud-detection-mlops
+```
+
+Nếu bỏ `deploy-path`, script sẽ mặc định dùng:
+
+- `/home/<deploy-user>/tcb-fraud-detection-mlops`
+
+Script này sẽ:
+
+- cài `git`, `curl`, `ca-certificates`
+- thêm Docker official apt repository
+- cài `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`
+- bật Docker service
+- thêm deploy user vào group `docker`
+- tạo và cấp quyền cho `DEPLOY_PATH`
+
+Hoặc cài thủ công:
+
 ```bash
 sudo apt-get update
-sudo apt-get install -y git curl ca-certificates docker.io docker-compose-plugin
+sudo apt-get install -y git curl ca-certificates
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 ```
