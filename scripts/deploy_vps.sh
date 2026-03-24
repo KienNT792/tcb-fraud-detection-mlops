@@ -16,6 +16,8 @@ SYNC_RUNTIME_BUNDLE_FROM_REGISTRY="${SYNC_RUNTIME_BUNDLE_FROM_REGISTRY:-true}"
 MLFLOW_REGISTERED_MODEL_NAME="${MLFLOW_REGISTERED_MODEL_NAME:-tcb-fraud-xgboost}"
 MLFLOW_DEPLOY_STAGE="${MLFLOW_DEPLOY_STAGE:-Production}"
 MLFLOW_RUNTIME_BUNDLE_PATH="${MLFLOW_RUNTIME_BUNDLE_PATH:-runtime_bundle}"
+ALLOW_REPO_BOOTSTRAP_ON_EMPTY_REGISTRY="${ALLOW_REPO_BOOTSTRAP_ON_EMPTY_REGISTRY:-true}"
+BOOTSTRAP_RUNTIME_BUNDLE_DIR="${BOOTSTRAP_RUNTIME_BUNDLE_DIR:-bootstrap_runtime_bundle}"
 
 if [[ "${DEPLOY_PATH_INPUT}" = /* ]]; then
   DEPLOY_PATH="${DEPLOY_PATH_INPUT}"
@@ -66,6 +68,50 @@ wait_for_endpoint() {
 
   echo "Timed out waiting for ${name} at ${endpoint}"
   return 1
+}
+
+bootstrap_runtime_bundle_from_repo() {
+  local processed_src="$DEPLOY_PATH/$BOOTSTRAP_RUNTIME_BUNDLE_DIR/processed"
+  local processed_dst="$DEPLOY_PATH/data/processed"
+  local required_model_files=(
+    "$DEPLOY_PATH/models/xgb_fraud_model.joblib"
+    "$DEPLOY_PATH/models/metrics.json"
+    "$DEPLOY_PATH/models/feature_importance.csv"
+  )
+  local required_processed_files=(
+    "features.json"
+    "customer_stats.parquet"
+    "segment_label_map.json"
+    "amount_median_train.json"
+    "categorical_maps.json"
+  )
+  local missing_files=()
+  local file=""
+
+  for file in "${required_model_files[@]}"; do
+    if [[ ! -f "$file" ]]; then
+      missing_files+=("$file")
+    fi
+  done
+
+  for file in "${required_processed_files[@]}"; do
+    if [[ ! -f "$processed_src/$file" ]]; then
+      missing_files+=("$processed_src/$file")
+    fi
+  done
+
+  if [[ "${#missing_files[@]}" -gt 0 ]]; then
+    echo "Repository bootstrap runtime bundle is incomplete:"
+    printf '  %s\n' "${missing_files[@]}"
+    return 1
+  fi
+
+  mkdir -p "$processed_dst"
+  for file in "${required_processed_files[@]}"; do
+    cp "$processed_src/$file" "$processed_dst/$file"
+  done
+
+  echo "Bootstrapped runtime bundle from repository artifacts."
 }
 
 sync_runtime_env_file() {
@@ -283,22 +329,36 @@ wait_for_endpoint "mlflow" "http://127.0.0.1:${MLFLOW_PORT:-5000}" 24 5
 
 if [[ "$SYNC_RUNTIME_BUNDLE_FROM_REGISTRY" == "true" ]]; then
   echo "Syncing runtime bundle from MLflow Registry stage=${MLFLOW_DEPLOY_STAGE}"
-  if ! docker run --rm \
-    --network host \
-    --user "$(id -u):$(id -g)" \
-    -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
-    -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
-    -e MLFLOW_S3_ENDPOINT_URL="http://127.0.0.1:${MINIO_API_PORT:-9000}" \
-    -v "$DEPLOY_PATH:/workspace" \
-    -w /workspace \
-    ghcr.io/mlflow/mlflow:v2.14.3 \
-    python scripts/runtime_bundle_registry.py \
-      --tracking-uri "http://127.0.0.1:${MLFLOW_PORT:-5000}" \
-      download-stage \
-      --model-name "$MLFLOW_REGISTERED_MODEL_NAME" \
-      --stage "$MLFLOW_DEPLOY_STAGE" \
-      --artifact-path "$MLFLOW_RUNTIME_BUNDLE_PATH" \
-      --output-root /workspace; then
+  set +e
+  runtime_bundle_output="$(
+    docker run --rm \
+      --network host \
+      --user "$(id -u):$(id -g)" \
+      -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+      -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+      -e MLFLOW_S3_ENDPOINT_URL="http://127.0.0.1:${MINIO_API_PORT:-9000}" \
+      -v "$DEPLOY_PATH:/workspace" \
+      -w /workspace \
+      ghcr.io/mlflow/mlflow:v2.14.3 \
+      python scripts/runtime_bundle_registry.py \
+        --tracking-uri "http://127.0.0.1:${MLFLOW_PORT:-5000}" \
+        download-stage \
+        --model-name "$MLFLOW_REGISTERED_MODEL_NAME" \
+        --stage "$MLFLOW_DEPLOY_STAGE" \
+        --artifact-path "$MLFLOW_RUNTIME_BUNDLE_PATH" \
+        --output-root /workspace 2>&1
+  )"
+  runtime_bundle_status=$?
+  set -e
+  printf '%s\n' "$runtime_bundle_output"
+
+  if [[ "$runtime_bundle_status" -ne 0 ]]; then
+    if [[ "$ALLOW_REPO_BOOTSTRAP_ON_EMPTY_REGISTRY" == "true" ]] && \
+      [[ "$runtime_bundle_output" == *"Registered Model with name=${MLFLOW_REGISTERED_MODEL_NAME} not found"* || \
+         "$runtime_bundle_output" == *"No model version found for name=${MLFLOW_REGISTERED_MODEL_NAME} stage=${MLFLOW_DEPLOY_STAGE}"* ]]; then
+      echo "MLflow Registry is empty for ${MLFLOW_REGISTERED_MODEL_NAME}/${MLFLOW_DEPLOY_STAGE}. Falling back to repository bootstrap artifacts."
+      bootstrap_runtime_bundle_from_repo
+    else
     echo "Failed to sync runtime bundle from MLflow Registry."
     echo "If the registered model ${MLFLOW_REGISTERED_MODEL_NAME} does not exist yet,"
     echo "bootstrap it once from a machine that already has models/ and data/processed/:"
@@ -307,6 +367,7 @@ if [[ "$SYNC_RUNTIME_BUNDLE_FROM_REGISTRY" == "true" ]]; then
     echo "backfill the latest stage bundle with:"
     echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} publish-stage --model-name ${MLFLOW_REGISTERED_MODEL_NAME} --stage ${MLFLOW_DEPLOY_STAGE}"
     exit 1
+    fi
   fi
 fi
 
