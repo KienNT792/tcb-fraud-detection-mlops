@@ -141,6 +141,20 @@ jobs:
               DEPLOY_PATH="$HOME/$DEPLOY_PATH"
             fi
 
+            for cmd in git docker; do
+              if ! command -v "$cmd" >/dev/null 2>&1; then
+                echo "Missing required command on VPS: $cmd"
+                echo "Install prerequisites first. See docs/cloud_ssh_setup.md"
+                exit 1
+              fi
+            done
+
+            if ! docker compose version >/dev/null 2>&1; then
+              echo "Missing required Docker Compose plugin on VPS."
+              echo "Install docker-compose-plugin first. See docs/cloud_ssh_setup.md"
+              exit 1
+            fi
+
             mkdir -p $DEPLOY_PATH
             cd $DEPLOY_PATH
 
@@ -198,6 +212,13 @@ jobs:
             if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
               DEPLOY_PATH="$HOME/$DEPLOY_PATH"
             fi
+
+            if ! command -v curl >/dev/null 2>&1; then
+              echo "Missing required command on VPS: curl"
+              echo "Install prerequisites first. See docs/cloud_ssh_setup.md"
+              exit 1
+            fi
+
             cd $DEPLOY_PATH
             set -a && . ./.env && set +a
 
