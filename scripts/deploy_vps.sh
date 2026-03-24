@@ -5,7 +5,7 @@ set -euo pipefail
 DEPLOY_PATH_INPUT="${DEPLOY_PATH:-tcb-fraud-detection-mlops}"
 DEPLOY_REF="${DEPLOY_REF:-main}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$HOME/.tcb_deploy_env}"
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-}"
 DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-tungb12ok}"
 
 if [[ "${DEPLOY_PATH_INPUT}" = /* ]]; then
@@ -20,6 +20,32 @@ require_cmd() {
     echo "Missing required command on VPS: $cmd"
     exit 1
   fi
+}
+
+resolve_deploy_env_file() {
+  local candidates=()
+  local user_home=""
+
+  if [[ -n "${HOME:-}" ]]; then
+    candidates+=("$HOME/.tcb_deploy_env")
+  fi
+
+  if user_home="$(getent passwd "$(id -un)" | cut -d: -f6 2>/dev/null)"; then
+    if [[ -n "$user_home" ]]; then
+      candidates+=("$user_home/.tcb_deploy_env")
+    fi
+  fi
+
+  candidates+=("$DEPLOY_PATH/.tcb_deploy_env")
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 for cmd in git docker curl; do
@@ -48,14 +74,23 @@ fi
 echo "Deploy path: $DEPLOY_PATH"
 echo "Branch: $DEPLOY_REF"
 echo "Image tag: $IMAGE_TAG"
+echo "SSH user: $(id -un)"
+echo "HOME: ${HOME:-<unset>}"
 
 git fetch --all --prune
 git checkout "$DEPLOY_REF"
 git pull --ff-only origin "$DEPLOY_REF"
 
-if [[ -f "$DEPLOY_ENV_FILE" ]]; then
+if [[ -z "$DEPLOY_ENV_FILE" ]]; then
+  DEPLOY_ENV_FILE="$(resolve_deploy_env_file || true)"
+fi
+
+if [[ -n "$DEPLOY_ENV_FILE" && -f "$DEPLOY_ENV_FILE" ]]; then
+  echo "Loading deploy env file: $DEPLOY_ENV_FILE"
   # shellcheck disable=SC1090
   . "$DEPLOY_ENV_FILE"
+else
+  echo "No deploy env file found."
 fi
 
 if [[ ! -f .env ]]; then
@@ -65,7 +100,23 @@ fi
 
 if [[ -z "${DOCKERHUB_TOKEN:-}" ]]; then
   echo "Missing DOCKERHUB_TOKEN."
-  echo "Set it in the shell or save it in $DEPLOY_ENV_FILE"
+  echo "The token exported in an old shell does not persist to a new SSH session."
+  echo "Save it in one of these files instead:"
+  if [[ -n "${HOME:-}" ]]; then
+    echo "  - $HOME/.tcb_deploy_env"
+  fi
+  echo "  - $DEPLOY_PATH/.tcb_deploy_env"
+  if user_home="$(getent passwd "$(id -un)" | cut -d: -f6 2>/dev/null)"; then
+    if [[ -n "$user_home" ]]; then
+      echo "  - $user_home/.tcb_deploy_env"
+    fi
+  fi
+  echo "Example:"
+  echo "  cat > ~/.tcb_deploy_env <<'EOF'"
+  echo "  DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME"
+  echo "  DOCKERHUB_TOKEN=your_dockerhub_token"
+  echo "  EOF"
+  echo "  chmod 600 ~/.tcb_deploy_env"
   exit 1
 fi
 
