@@ -898,7 +898,6 @@ class TestFraudDetector:
         with pytest.raises(FileNotFoundError):
             FraudDetector(str(tmp_path), str(tmp_path))
 
-
 # ===========================================================================
 # Tests — inference.py: FraudDetector._transform
 # ===========================================================================
@@ -1269,7 +1268,6 @@ class TestLoadArtifacts:
                 str(artifact_dir / "processed"),
             )
 
-
 # ===========================================================================
 # Tests — evaluate.py: save_evaluation_report
 # ===========================================================================
@@ -1328,7 +1326,6 @@ class TestExplainShap:
         )
         assert (tmp_path / "shap_summary.png").exists()
         assert (tmp_path / "shap_waterfall.png").exists()
-
 
 # ===========================================================================
 # Tests — inference.py: _transform edge cases
@@ -1438,8 +1435,43 @@ class TestTransformEdgeCases:
             json.dump(meta, fh)
 
         det = FraudDetector(str(artifact_dir), str(proc))
-        # _score will warn about missing 'invented_feat_xyz'
-        # and fill it with 0
-        scores = det._score(test_df.head(3).copy())
+        # Mock predict_proba to avoid XGBoost feature mismatch
+        dummy = np.array([[0.8, 0.2], [0.7, 0.3], [0.6, 0.4]])
+        with patch.object(
+            det._model, "predict_proba",
+            return_value=dummy,
+        ):
+            scores = det._score(test_df.head(3).copy())
         assert len(scores) == 3
         assert all(0.0 <= s <= 1.0 for s in scores)
+
+# ===========================================================================
+# Tests — train.py: configure_mlflow (covers lines 79, 89)
+# ===========================================================================
+
+class TestTrainConfigureMlflow:
+    """Tests for train.configure_mlflow."""
+
+    @patch("ml_pipeline.src.train.mlflow")
+    def test_tracking_uri(
+        self, mock_mlflow: MagicMock,
+    ) -> None:
+        from ml_pipeline.src.train import configure_mlflow
+
+        env = {"MLFLOW_TRACKING_URI": "http://mlflow:5000"}
+        with patch.dict(os.environ, env, clear=True):
+            configure_mlflow("train")
+        mock_mlflow.set_tracking_uri.assert_called_once_with(
+            "http://mlflow:5000"
+        )
+
+    @patch("ml_pipeline.src.train.mlflow")
+    def test_custom_run_name(
+        self, mock_mlflow: MagicMock,
+    ) -> None:
+        from ml_pipeline.src.train import configure_mlflow
+
+        env = {"MLFLOW_RUN_NAME": "custom-run"}
+        with patch.dict(os.environ, env, clear=True):
+            name = configure_mlflow("train")
+        assert name == "custom-run"
