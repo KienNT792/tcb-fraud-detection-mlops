@@ -27,6 +27,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -37,36 +38,28 @@ jobs:
       - name: Lint
         run: flake8 ml_pipeline/src serving_api/app dags
 
-      - name: Test preprocessing module with coverage gate
+      - name: Run all tests with coverage gate
         run: |
           pytest ml_pipeline/tests/test_preprocess.py \
-            --cov=ml_pipeline.src.preprocess \
+                 ml_pipeline/tests/test_model.py \
+                 serving_api/tests \
+            --cov=ml_pipeline.src \
+            --cov=serving_api.app \
             --cov-report=term-missing \
             --cov-fail-under=80
 
-      - name: Test model pipeline with coverage gate
-        run: |
-          pytest ml_pipeline/tests/test_model.py \
-            --cov=ml_pipeline.src.train \
-            --cov=ml_pipeline.src.evaluate \
-            --cov=ml_pipeline.src.inference \
-            --cov-report=term-missing \
-            --cov-fail-under=80
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Test serving API with coverage gate
-        run: |
-          pytest serving_api/tests \
-            --cov=serving_api.app.main \
-            --cov=serving_api.app.model_loader \
-            --cov-report=term-missing \
-            --cov-fail-under=80
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            --file serving_api/Dockerfile \
-            --tag tcb-fraud-fastapi:${{ github.sha }} \
-            .
+      - name: Build Docker image (with cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: serving_api/Dockerfile
+          push: false
+          tags: tcb-fraud-fastapi:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ---------------------------------------------------------------------------
   # CD — Deploy to Google Cloud VPS (only on push to main or dev/ver2)
