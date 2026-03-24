@@ -57,10 +57,7 @@ _ROOT_ARTIFACTS = (
     _MODEL_FILENAME,
     _METRICS_FILENAME,
     _FEATURE_IMPORTANCE_FILENAME,
-)
-
-
-
+)       
 def _parse_threshold(raw_value: str) -> float:
     threshold = float(raw_value)
     return threshold / 100.0 if threshold > 1 else threshold
@@ -109,7 +106,10 @@ def _find_experiment_by_name(
 def should_trigger_retraining() -> str:
     """Decide whether to retrain based on latest MLflow eval_f1 metric."""
     tracking_uri = shared_env["MLFLOW_TRACKING_URI"]
-    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", DEFAULT_EXPERIMENT_NAME)
+    experiment_name = os.getenv(
+        "MLFLOW_EXPERIMENT_NAME",
+        DEFAULT_EXPERIMENT_NAME,
+    )
     metric_name = os.getenv("MODEL_QUALITY_METRIC", DEFAULT_RETRAIN_METRIC)
     threshold = _parse_threshold(os.getenv("MODEL_QUALITY_THRESHOLD", "0.80"))
     experiment = _find_experiment_by_name(tracking_uri, experiment_name)
@@ -227,7 +227,8 @@ def stage_candidate_after_eval(**context: Any) -> dict[str, Any]:
     # Step 4 — Write model_manifest.json (triggers auto-reload)
     dag_run = context.get("dag_run")
     run_id = dag_run.run_id if dag_run else "manual"
-    model_id = f"airflow-{datetime.now(tz=timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    ts = datetime.now(tz=timezone.utc)
+    model_id = f"airflow-{ts.strftime('%Y%m%d%H%M%S')}"
 
     # Collect metrics summary
     metrics_summary: dict[str, Any] = {}
@@ -330,6 +331,7 @@ def build_task_env(task_id: str) -> dict[str, str]:
         "AIRFLOW_PIPELINE_LOGICAL_DATE": "{{ ts }}",
         "MLFLOW_RUN_NAME": f"{task_id}-" + "{{ ts_nodash }}",
     }
+
 
 default_args = {
     "owner": "mlops",

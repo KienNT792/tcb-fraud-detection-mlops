@@ -62,7 +62,10 @@ def find_latest_version_by_run(
     versions: list[Any] = client.search_model_versions(
         f"name='{model_name}'",
     )
-    matched = [int(v.version) for v in versions if getattr(v, "run_id", "") == run_id]
+    matched = [
+        int(v.version) for v in versions
+        if getattr(v, "run_id", "") == run_id
+    ]
     if not matched:
         return None
     return max(matched)
