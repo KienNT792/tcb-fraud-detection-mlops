@@ -2,12 +2,12 @@
 
 Tài liệu này mô tả phần chuẩn bị trên VPS để workflow [`ci-cd-pipeline.yml`](../.github/workflows/ci-cd-pipeline.yml) có thể deploy bằng `SSH_DEPLOY_KEY`.
 
-## 1. Secrets cần có trên GitHub Actions
+## 1. GitHub Actions config cần có
 
-- `GCP_DEPLOY_HOST`: IP hoặc DNS của VPS
-- `GCP_DEPLOY_USER`: user dùng để SSH vào VPS
+- `GCP_DEPLOY_HOST`: IP hoặc DNS của VPS, có thể lưu ở `Secrets` hoặc `Variables`
+- `GCP_DEPLOY_USER`: user dùng để SSH vào VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `SSH_DEPLOY_KEY`: private key dùng cho GitHub Actions SSH vào VPS
-- `GIT_REPO_URL`: URL clone repo trên VPS
+- `GIT_REPO_URL`: URL clone repo trên VPS, có thể lưu ở `Secrets` hoặc `Variables`
 
 ## 2. Phân biệt public key và private key
 
@@ -15,6 +15,7 @@ Nếu giá trị của bạn bắt đầu bằng `ssh-ed25519 AAAA...` thì đó
 
 - `SSH_DEPLOY_KEY` trên GitHub Actions phải là private key, thường bắt đầu bằng `-----BEGIN OPENSSH PRIVATE KEY-----`
 - Public key tương ứng mới là thứ cần thêm vào file `~/.ssh/authorized_keys` trên VPS
+- `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, `GIT_REPO_URL` không bắt buộc là secret; repo `ci-cd-pipeline.yml` hiện đọc được cả từ `Secrets` lẫn `Variables`
 
 ## 3. Cài đặt tối thiểu trên VPS
 
