@@ -300,9 +300,12 @@ if [[ "$SYNC_RUNTIME_BUNDLE_FROM_REGISTRY" == "true" ]]; then
       --artifact-path "$MLFLOW_RUNTIME_BUNDLE_PATH" \
       --output-root /workspace; then
     echo "Failed to sync runtime bundle from MLflow Registry."
-    echo "If the current Production model was trained before runtime bundles were published,"
-    echo "backfill it once from a machine that already has models/ and data/processed/:"
-    echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} publish-run --run-id <training_run_id>"
+    echo "If the registered model ${MLFLOW_REGISTERED_MODEL_NAME} does not exist yet,"
+    echo "bootstrap it once from a machine that already has models/ and data/processed/:"
+    echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} bootstrap-run --run-id <training_run_id> --model-name ${MLFLOW_REGISTERED_MODEL_NAME} --stage ${MLFLOW_DEPLOY_STAGE}"
+    echo "If the registered model exists but was trained before runtime bundles were published,"
+    echo "backfill the latest stage bundle with:"
+    echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} publish-stage --model-name ${MLFLOW_REGISTERED_MODEL_NAME} --stage ${MLFLOW_DEPLOY_STAGE}"
     exit 1
   fi
 fi

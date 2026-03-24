@@ -12,11 +12,16 @@ from pathlib import Path
 
 import mlflow
 from mlflow import MlflowClient
+from mlflow.exceptions import RestException
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from ml_pipeline.src.model_registry import (  # noqa: E402
+    register_model_from_run,
+    transition_model_version_stage,
+)
 from ml_pipeline.src.runtime_bundle import (  # noqa: E402
     MODEL_RUNTIME_FILES,
     OPTIONAL_MODEL_RUNTIME_FILES,
@@ -48,6 +53,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(REPO_ROOT / "models"),
     )
     publish_parser.add_argument(
+        "--processed-dir",
+        default=str(REPO_ROOT / "data" / "processed"),
+    )
+
+    bootstrap_parser = subparsers.add_parser(
+        "bootstrap-run",
+        help="Register a run into MLflow Registry, transition stage, and attach a runtime bundle.",
+    )
+    bootstrap_parser.add_argument("--run-id", required=True)
+    bootstrap_parser.add_argument(
+        "--model-name",
+        default=os.getenv("MLFLOW_REGISTERED_MODEL_NAME", "tcb-fraud-xgboost"),
+    )
+    bootstrap_parser.add_argument(
+        "--stage",
+        default=os.getenv("MLFLOW_DEPLOY_STAGE", "Production"),
+    )
+    bootstrap_parser.add_argument(
+        "--models-dir",
+        default=str(REPO_ROOT / "models"),
+    )
+    bootstrap_parser.add_argument(
+        "--processed-dir",
+        default=str(REPO_ROOT / "data" / "processed"),
+    )
+
+    publish_stage_parser = subparsers.add_parser(
+        "publish-stage",
+        help="Attach runtime bundle artifacts to the latest model version in a registry stage.",
+    )
+    publish_stage_parser.add_argument(
+        "--model-name",
+        default=os.getenv("MLFLOW_REGISTERED_MODEL_NAME", "tcb-fraud-xgboost"),
+    )
+    publish_stage_parser.add_argument(
+        "--stage",
+        default=os.getenv("MLFLOW_DEPLOY_STAGE", "Production"),
+    )
+    publish_stage_parser.add_argument(
+        "--models-dir",
+        default=str(REPO_ROOT / "models"),
+    )
+    publish_stage_parser.add_argument(
         "--processed-dir",
         default=str(REPO_ROOT / "data" / "processed"),
     )
@@ -104,6 +152,60 @@ def publish_run(
             RUNTIME_BUNDLE_ARTIFACT_PATH,
         )
     print(f"Runtime bundle published to run {run_id}")
+
+
+def ensure_registered_model(
+    *,
+    client: MlflowClient,
+    model_name: str,
+) -> None:
+    try:
+        client.get_registered_model(model_name)
+        return
+    except RestException as exc:
+        if "RESOURCE_DOES_NOT_EXIST" not in str(exc):
+            raise
+
+    client.create_registered_model(model_name)
+
+
+def bootstrap_run(
+    *,
+    run_id: str,
+    model_name: str,
+    stage: str,
+    models_dir: str,
+    processed_dir: str,
+) -> None:
+    client = MlflowClient()
+    ensure_registered_model(client=client, model_name=model_name)
+    version = register_model_from_run(
+        run_id=run_id,
+        artifact_path="model",
+        model_name=model_name,
+    )
+    transition_model_version_stage(
+        model_name=model_name,
+        version=version,
+        stage=stage,
+        archive_existing_versions=True,
+    )
+    publish_run(
+        run_id=run_id,
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+    )
+    print(
+        json.dumps(
+            {
+                "model_name": model_name,
+                "stage": stage,
+                "version": version,
+                "run_id": run_id,
+            },
+            indent=2,
+        )
+    )
 
 
 def resolve_latest_model_version(
@@ -204,6 +306,30 @@ def main() -> None:
     if args.command == "publish-run":
         publish_run(
             run_id=args.run_id,
+            models_dir=args.models_dir,
+            processed_dir=args.processed_dir,
+        )
+        return
+
+    if args.command == "bootstrap-run":
+        bootstrap_run(
+            run_id=args.run_id,
+            model_name=args.model_name,
+            stage=args.stage,
+            models_dir=args.models_dir,
+            processed_dir=args.processed_dir,
+        )
+        return
+
+    if args.command == "publish-stage":
+        client = MlflowClient()
+        version = resolve_latest_model_version(
+            client=client,
+            model_name=args.model_name,
+            stage=args.stage,
+        )
+        publish_run(
+            run_id=version.run_id,
             models_dir=args.models_dir,
             processed_dir=args.processed_dir,
         )
