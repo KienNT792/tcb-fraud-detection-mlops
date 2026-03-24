@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY serving_api/requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip wheel --wheel-dir /wheels -r /tmp/requirements.txt
+    pip wheel --wheel-dir /wheels -r /tmp/requirements.txt \
+    # Strip GPU-only CUDA packages — VPS is CPU-only; nvidia-nccl-cu12 alone is ~200MB
+    && find /wheels -name 'nvidia_*.whl' -delete
 
 
 FROM python:3.10-slim AS runtime

@@ -21,6 +21,7 @@ htmlcov/
 
 data/
 artifacts/
+ml_pipeline/mlruns/
 .mlflow/
 .env
 .env.*
