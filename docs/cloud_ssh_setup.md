@@ -118,6 +118,12 @@ git clone https://github.com/KienNT792/tcb-fraud-detection-mlops.git
 
 Nếu dùng `DEPLOY_PATH` khác mặc định, clone repo vào đúng thư mục đó trước khi rerun workflow.
 
+CD workflow sau đó sẽ chỉ SSH vào VPS và chạy:
+
+```bash
+bash ./scripts/deploy_vps.sh
+```
+
 Các biến tối thiểu hiện repo đang dùng:
 
 - `MINIO_ROOT_USER`

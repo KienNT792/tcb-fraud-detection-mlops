@@ -32,7 +32,12 @@ Sau khi CI thành công (chỉ trên branch `main` hoặc `dev/ver2`):
 
 1. GitHub Actions SSH vào Google Cloud VPS.
 2. VPS cập nhật source code từ branch đích.
-3. VPS chạy `git pull` trong repo đã clone sẵn, sau đó `docker login`, `docker compose pull`, rồi `docker compose up -d --no-build` để cập nhật các service:
+3. VPS chạy script `scripts/deploy_vps.sh` trong repo đã clone sẵn để:
+   - `git pull`
+   - `docker login`
+   - `docker compose pull`
+   - `docker compose up -d --no-build`
+   - health check
    - FastAPI Stable + Candidate
    - Nginx Load Balancer
    - MLflow server

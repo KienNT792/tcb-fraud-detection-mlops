@@ -44,12 +44,7 @@ Chỉ chạy khi `push` lên branch deploy:
 
 - validate config deploy
 - GitHub Actions SSH vào VPS
-- VPS `git pull` trong repo đã clone sẵn
-- VPS `docker login` vào Docker Hub
-- VPS `docker compose pull`
-- tạo `.env` từ `.env.example` nếu chưa có
-- chạy `docker compose up -d --no-build`
-- chạy health check cho FastAPI, MLflow, Airflow, Grafana
+- VPS chạy `scripts/deploy_vps.sh` trong repo đã clone sẵn
 
 ## 4. Các key và config cần có
 
@@ -69,6 +64,7 @@ Ghi nhớ:
 - `SSH_DEPLOY_KEY` phải là private key, thường bắt đầu bằng `-----BEGIN OPENSSH PRIVATE KEY-----`
 - public key tương ứng phải nằm trong `~/.ssh/authorized_keys` trên VPS
 - image deploy hiện được hardcode là `tungb12ok/tcb-detect-credit`
+- CD workflow hiện chỉ gọi bash script deploy trên VPS
 
 ## 5. Cấu hình môi trường trên VPS
 

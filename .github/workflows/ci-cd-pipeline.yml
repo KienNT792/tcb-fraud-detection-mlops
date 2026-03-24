@@ -133,37 +133,19 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: tungb12ok
         with:
           host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
           username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
           # SSH_DEPLOY_KEY must contain the private key content.
           # Install the matching public key in ~/.ssh/authorized_keys on the VPS.
           key: ${{ secrets.SSH_DEPLOY_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DOCKERHUB_TOKEN
+          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DOCKERHUB_TOKEN,DOCKERHUB_USERNAME
           script: |
             set -euo pipefail
 
             if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
               DEPLOY_PATH="$HOME/$DEPLOY_PATH"
-            fi
-
-            for cmd in git docker; do
-              if ! command -v "$cmd" >/dev/null 2>&1; then
-                echo "Missing required command on VPS: $cmd"
-                echo "Install prerequisites first. See docs/cloud_ssh_setup.md"
-                exit 1
-              fi
-            done
-
-            if ! docker compose version >/dev/null 2>&1; then
-              echo "Missing required Docker Compose plugin on VPS."
-              echo "Install docker-compose-plugin first. See docs/cloud_ssh_setup.md"
-              exit 1
-            fi
-
-            if [ -z "${DOCKERHUB_TOKEN:-}" ]; then
-              echo "Missing Docker Hub token on VPS deploy step."
-              exit 1
             fi
 
             if [ ! -d "$DEPLOY_PATH" ]; then
@@ -180,66 +162,4 @@ jobs:
               exit 1
             fi
 
-            git fetch --all --prune
-            git checkout "$DEPLOY_REF"
-            git pull --ff-only origin "$DEPLOY_REF"
-
-            # Tạo .env từ .env.example nếu chưa tồn tại
-            if [ ! -f .env ]; then
-              cp .env.example .env
-              echo "⚠️  Created .env from .env.example — review and update secrets!"
-            fi
-
-            printf '%s' "$DOCKERHUB_TOKEN" | docker login -u tungb12ok --password-stdin
-            IMAGE_TAG=$IMAGE_TAG docker compose pull fastapi-stable fastapi-candidate
-            IMAGE_TAG=$IMAGE_TAG docker compose up -d --no-build
-
-      - name: Wait for services to start
-        run: sleep 20
-
-      - name: Health check — FastAPI (Stable)
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
-          username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
-          key: ${{ secrets.SSH_DEPLOY_KEY }}
-          envs: DEPLOY_PATH
-          script: |
-            set -euo pipefail
-            if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
-              DEPLOY_PATH="$HOME/$DEPLOY_PATH"
-            fi
-
-            if ! command -v curl >/dev/null 2>&1; then
-              echo "Missing required command on VPS: curl"
-              echo "Install prerequisites first. See docs/cloud_ssh_setup.md"
-              exit 1
-            fi
-
-            cd $DEPLOY_PATH
-            set -a && . ./.env && set +a
-
-            for endpoint in \
-              "http://localhost:${FASTAPI_PORT:-8000}/health" \
-              "http://localhost:${MLFLOW_PORT:-5000}" \
-              "http://localhost:${AIRFLOW_PORT:-8080}/health" \
-              "http://localhost:${GRAFANA_PORT:-3000}/api/health"; do
-
-              echo "Checking ${endpoint}..."
-              for attempt in $(seq 1 10); do
-                if curl --fail --silent --show-error "$endpoint" > /dev/null 2>&1; then
-                  echo "  ✓ ${endpoint} is healthy"
-                  break
-                fi
-                if [ "$attempt" -eq 10 ]; then
-                  echo "  ✗ ${endpoint} failed after 10 attempts"
-                  exit 1
-                fi
-                sleep 10
-              done
-            done
-
-            echo ""
-            echo "============================================"
-            echo "  All health checks passed!"
-            echo "============================================"
+            bash ./scripts/deploy_vps.sh

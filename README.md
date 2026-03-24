@@ -690,7 +690,7 @@ Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requ
 
 | Stage | Description |
 |---|---|
-| **Deploy to GCP VPS** | SSH → `git pull` in existing repo → `docker login` → `docker compose pull` → `docker compose up -d --no-build` |
+| **Deploy to GCP VPS** | SSH → run `scripts/deploy_vps.sh` in existing repo |
 | **Health Checks** | Poll FastAPI, MLflow, Airflow, Grafana — up to 10 retries × 10s |
 
 Required config: `SSH_DEPLOY_KEY` and `DOCKERHUB_TOKEN` in Secrets, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables.
