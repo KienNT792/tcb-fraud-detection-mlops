@@ -72,7 +72,6 @@ wait_for_endpoint() {
 
 bootstrap_runtime_bundle_from_repo() {
   local processed_src="$DEPLOY_PATH/$BOOTSTRAP_RUNTIME_BUNDLE_DIR/processed"
-  local processed_dst="$DEPLOY_PATH/data/processed"
   local required_model_files=(
     "$DEPLOY_PATH/models/xgb_fraud_model.joblib"
     "$DEPLOY_PATH/models/metrics.json"
@@ -106,10 +105,21 @@ bootstrap_runtime_bundle_from_repo() {
     return 1
   fi
 
-  mkdir -p "$processed_dst"
-  for file in "${required_processed_files[@]}"; do
-    cp "$processed_src/$file" "$processed_dst/$file"
-  done
+  docker run --rm \
+    -u root \
+    -e HOST_UID="$(id -u)" \
+    -e HOST_GID="$(id -g)" \
+    -e BOOTSTRAP_RUNTIME_BUNDLE_DIR="$BOOTSTRAP_RUNTIME_BUNDLE_DIR" \
+    -v "$DEPLOY_PATH:/workspace" \
+    -w /workspace \
+    "${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+    sh -lc '
+      set -e
+      mkdir -p /workspace/data/processed
+      cp "/workspace/${BOOTSTRAP_RUNTIME_BUNDLE_DIR}/processed/"* /workspace/data/processed/
+      chown -R "${HOST_UID}:${HOST_GID}" /workspace/data/processed
+      chmod -R u+rwX /workspace/data/processed
+    '
 
   echo "Bootstrapped runtime bundle from repository artifacts."
 }
