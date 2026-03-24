@@ -1,18 +1,58 @@
-name: CD Pipeline
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
       - dev/ver2
+  pull_request:
+    branches:
+      - main
+      - dev/ver2
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8
+          pip install -r ml_pipeline/requirements.txt -r serving_api/requirements-dev.txt
+
+      - name: Lint
+        run: flake8 ml_pipeline/src serving_api/app dags
+
+      - name: Run tests with coverage gate
+        run: |
+          pytest ml_pipeline/tests/test_preprocess.py \
+                 ml_pipeline/tests/test_model.py \
+                 serving_api/tests \
+            --cov=ml_pipeline.src \
+            --cov=serving_api.app \
+            --cov-report=term-missing \
+            --cov-fail-under=80
+
   docker:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       IMAGE_REPOSITORY: tungb12ok/tcb-detect-credit
@@ -43,7 +83,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    needs: docker
+    needs:
+      - test
+      - docker
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev/ver2')
     runs-on: ubuntu-latest
     environment: production
     env:
