@@ -1218,7 +1218,6 @@ class TestRiskLevel:
     ) -> None:
         assert detector._risk_level(0.9) == "HIGH"
 
-
 # ===========================================================================
 # Tests — evaluate.py: load_artifacts
 # ===========================================================================
@@ -1383,3 +1382,64 @@ class TestTransformEdgeCases:
         transformed = detector._transform(sample)
         assert "transaction_hour" in transformed.columns
         assert "hour_of_day" not in transformed.columns
+
+    def test_categorical_encoding(
+        self,
+        artifact_dir: Path,
+        test_df: pd.DataFrame,
+    ) -> None:
+        """Covers _transform lines 407-414."""
+        from ml_pipeline.src.inference import FraudDetector
+
+        # Write a non-empty categorical_maps so the loop executes
+        cat_maps = {"currency": {"VND": 0, "USD": 1}}
+        proc = artifact_dir / "processed"
+        with open(proc / "categorical_maps.json", "w") as fh:
+            json.dump(cat_maps, fh)
+
+        det = FraudDetector(
+            str(artifact_dir),
+            str(proc),
+        )
+        sample = test_df.head(3).copy()
+        # Give currency string values matching the map
+        sample["currency"] = "VND"
+        transformed = det._transform(sample)
+        assert (transformed["currency"] == 0).all()
+
+    def test_high_cardinality_drop(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        """Covers _transform lines 416-419."""
+        sample = test_df.head(3).copy()
+        sample["merchant_name"] = "SomeShop"
+        sample["merchant_city"] = "Hanoi"
+        transformed = detector._transform(sample)
+        assert "merchant_name" not in transformed.columns
+        assert "merchant_city" not in transformed.columns
+
+    def test_score_fills_missing_features(
+        self,
+        artifact_dir: Path,
+        test_df: pd.DataFrame,
+    ) -> None:
+        """Covers _score lines 436-442."""
+        from ml_pipeline.src.inference import FraudDetector
+
+        proc = artifact_dir / "processed"
+        # Add a fake extra feature to features.json
+        feat_path = proc / "features.json"
+        with open(feat_path) as fh:
+            meta = json.load(fh)
+        meta["features"].append("invented_feat_xyz")
+        with open(feat_path, "w") as fh:
+            json.dump(meta, fh)
+
+        det = FraudDetector(str(artifact_dir), str(proc))
+        # _score will warn about missing 'invented_feat_xyz'
+        # and fill it with 0
+        scores = det._score(test_df.head(3).copy())
+        assert len(scores) == 3
+        assert all(0.0 <= s <= 1.0 for s in scores)
