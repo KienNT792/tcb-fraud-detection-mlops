@@ -164,6 +164,10 @@ services:
       AIRFLOW__WEBSERVER__WORKERS: "1"
       AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "300"
       AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "300"
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: "${AIRFLOW_ADMIN_USER:-admin}"
+      _AIRFLOW_WWW_USER_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-admin123}"
       AIRFLOW_VENV_PYTHON: /opt/airflow/venv/bin/python
       PATH: /opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin
       PYTHONPATH: /home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project
