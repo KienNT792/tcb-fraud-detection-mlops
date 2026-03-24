@@ -24,7 +24,7 @@ Khi developer push code hoặc tạo PR:
    - `ml_pipeline/tests/test_preprocess.py` (preprocessing)
    - `ml_pipeline/tests/test_model.py` (train + evaluate + inference)
    - `serving_api/tests/` (API endpoints + model loader)
-5. Build Docker image `tcb-fraud-fastapi:<sha>`.
+5. Build và push Docker image `tungb12ok/tcb-detect-credit:<sha>` lên Docker Hub.
 
 ## 3. Luồng CD
 
@@ -32,7 +32,7 @@ Sau khi CI thành công (chỉ trên branch `main` hoặc `dev/ver2`):
 
 1. GitHub Actions SSH vào Google Cloud VPS.
 2. VPS cập nhật source code từ branch đích.
-3. Chạy `docker compose up -d --build` để cập nhật các service:
+3. VPS `docker login`, `docker compose pull`, rồi `docker compose up -d --no-build` để cập nhật các service:
    - FastAPI Stable + Candidate
    - Nginx Load Balancer
    - MLflow server
@@ -95,5 +95,6 @@ GitHub Actions cần cấu hình Secrets:
 - `GCP_DEPLOY_USER` — SSH username (vd: `ubuntu`), có thể để ở Secrets hoặc Variables
 - `DEPLOY_PATH` — thư mục deploy trên VPS, có thể để ở Secrets hoặc Variables
 - `SSH_DEPLOY_KEY` — SSH private key dùng để Actions SSH vào VPS
+- `DOCKERHUB_TOKEN` — Docker Hub access token dùng để push image và pull trên VPS
 
 Tham khảo thêm hướng dẫn chuẩn bị VPS và cài public key tại `docs/cloud_ssh_setup.md`.

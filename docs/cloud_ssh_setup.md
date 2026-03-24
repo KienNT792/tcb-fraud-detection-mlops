@@ -8,10 +8,11 @@ Tài liệu này mô tả phần chuẩn bị trên VPS để workflow [`ci-cd-p
 - `GCP_DEPLOY_USER`: user dùng để SSH vào VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `DEPLOY_PATH`: đường dẫn deploy trên VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `SSH_DEPLOY_KEY`: private key dùng cho GitHub Actions SSH vào VPS
+- `DOCKERHUB_TOKEN`: Docker Hub access token dùng để push image trong CI và pull image trên VPS
 
 Workflow hiện tự dùng URL của chính repo đang chạy workflow, nên không còn cần cấu hình `GIT_REPO_URL`.
 Nếu `DEPLOY_PATH` không phải đường dẫn tuyệt đối, workflow sẽ tự resolve thành `$HOME/<DEPLOY_PATH>`.
-Với repo public hiện tại, deploy không cần `GIT_AUTH_TOKEN`.
+Image deploy hiện được hardcode là `tungb12ok/tcb-detect-credit`.
 
 ## 2. Phân biệt public key và private key
 

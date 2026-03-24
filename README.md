@@ -436,7 +436,7 @@ docker compose up -d
 
 | Service | Image | Port | Purpose |
 |---|---|---|---|
-| **fastapi** | `tcb-fraud-fastapi` | `8000` | Fraud prediction REST API |
+| **fastapi** | `tungb12ok/tcb-detect-credit` | `8000` | Fraud prediction REST API |
 | **mlflow** | `ghcr.io/mlflow/mlflow:v2.14.3` | `5000` | Experiment tracking UI |
 | **minio** | `minio/minio` | `9000` (API), `9001` (Console) | S3-compatible artifact store |
 | **airflow** | `apache/airflow:2.10.3-python3.10` | `8080` | DAG orchestration UI |
@@ -684,16 +684,16 @@ Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requ
 | **Test Preprocessing** | `pytest test_preprocess.py --cov-fail-under=80` |
 | **Test Model Pipeline** | `pytest test_model.py --cov-fail-under=80` (train + evaluate + inference) |
 | **Test Serving API** | `pytest serving_api/tests --cov-fail-under=80` |
-| **Build Docker Image** | `docker build --file serving_api/Dockerfile` → tag `tcb-fraud-fastapi:<sha>` |
+| **Build Docker Image** | Build and push `tungb12ok/tcb-detect-credit:<sha>` to Docker Hub |
 
 #### CD Job (only on push to `main` / `dev/ver2`)
 
 | Stage | Description |
 |---|---|
-| **Deploy to GCP VPS** | SSH → `git pull` → `docker compose up -d --build` |
+| **Deploy to GCP VPS** | SSH → `git pull` → `docker login` → `docker compose pull` → `docker compose up -d --no-build` |
 | **Health Checks** | Poll FastAPI, MLflow, Airflow, Grafana — up to 10 retries × 10s |
 
-Required config: `SSH_DEPLOY_KEY` in Secrets, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables.
+Required config: `SSH_DEPLOY_KEY` and `DOCKERHUB_TOKEN` in Secrets, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables.
 
 ---
 
