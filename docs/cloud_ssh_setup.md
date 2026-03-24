@@ -8,7 +8,8 @@ Tài liệu này mô tả phần chuẩn bị trên VPS để workflow [`ci-cd-p
 - `GCP_DEPLOY_USER`: user dùng để SSH vào VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `DEPLOY_PATH`: đường dẫn deploy trên VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `SSH_DEPLOY_KEY`: private key dùng cho GitHub Actions SSH vào VPS
-- `DOCKERHUB_TOKEN`: Docker Hub access token dùng để push image trong CI và pull image trên VPS
+- `DOCKERHUB_TOKEN`: Docker Hub access token dùng để push image trong CD workflow và pull image trên VPS
+- `DEPLOY_ENV_B64`: nội dung file `.env` production đã base64-encode để workflow tự ghi xuống VPS
 
 Nếu `DEPLOY_PATH` không phải đường dẫn tuyệt đối, workflow sẽ tự resolve thành `$HOME/<DEPLOY_PATH>`.
 Image deploy hiện được hardcode là `tungb12ok/tcb-detect-credit`.
@@ -94,31 +95,22 @@ Nếu bạn đang dùng đúng public key mà bạn gửi (`ssh-ed25519 AAAAC3Nz
 
 ## 5. Chuẩn bị project trên VPS
 
-Workflow từ bây giờ không còn tự clone repo trên VPS. Repo phải được clone sẵn tại `DEPLOY_PATH`.
+Workflow hiện có thể tự clone repo vào `DEPLOY_PATH` ở lần chạy đầu nếu thư mục này chưa tồn tại.
 
 Mặc định nếu bạn không cấu hình `DEPLOY_PATH`, repo hiện sẽ deploy vào:
 
 - `$HOME/tcb-fraud-detection-mlops`
 
-Nếu bạn muốn dùng `/opt/tcb-fraud-detection-mlops`, cần tạo sẵn thư mục và cấp quyền cho user deploy:
+Nếu bạn muốn dùng `/opt/tcb-fraud-detection-mlops`, chỉ cần đảm bảo parent directory có quyền phù hợp cho user deploy:
 
 ```bash
 sudo mkdir -p /opt/tcb-fraud-detection-mlops
 sudo chown -R "$USER":"$USER" /opt/tcb-fraud-detection-mlops
 ```
 
-Workflow cũng sẽ tự tạo `.env` từ `.env.example` ở lần chạy đầu nếu file `.env` chưa tồn tại. Sau đó bạn vẫn phải SSH vào VPS để cập nhật secret thật trong file `.env`.
+Khuyến nghị cấu hình `DEPLOY_ENV_B64` để workflow tự đồng bộ `.env` trong mỗi lần deploy. Nếu không có secret này, script sẽ dùng `.env` đang có trên VPS hoặc fallback sang `.env.example` ở lần chạy đầu.
 
-Clone repo một lần trên VPS:
-
-```bash
-cd ~
-git clone https://github.com/KienNT792/tcb-fraud-detection-mlops.git
-```
-
-Nếu dùng `DEPLOY_PATH` khác mặc định, clone repo vào đúng thư mục đó trước khi rerun workflow.
-
-CD workflow sau đó sẽ chỉ SSH vào VPS và chạy:
+CD workflow sẽ SSH vào VPS và chạy:
 
 ```bash
 bash ./scripts/deploy_vps.sh

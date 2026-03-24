@@ -1,0 +1,43 @@
+name: CI Manual
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8
+          pip install -r ml_pipeline/requirements.txt -r serving_api/requirements-dev.txt
+
+      - name: Lint
+        run: flake8 ml_pipeline/src serving_api/app dags
+
+      - name: Run all tests with coverage gate
+        run: |
+          pytest ml_pipeline/tests/test_preprocess.py \
+                 ml_pipeline/tests/test_model.py \
+                 serving_api/tests \
+            --cov=ml_pipeline.src \
+            --cov=serving_api.app \
+            --cov-report=term-missing \
+            --cov-fail-under=80
