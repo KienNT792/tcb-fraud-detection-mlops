@@ -942,3 +942,278 @@ class TestFraudDetectorTransform:
         sample["customer_id"] = "TOTALLY_NEW_CUSTOMER_XYZ_999"
         transformed = detector._transform(sample)
         assert (transformed["customer_tx_count"] == 0).all()
+
+# ===========================================================================
+# Tests — evaluate.py: configure_mlflow
+# ===========================================================================
+
+class TestConfigureMlflow:
+    """Tests for configure_mlflow."""
+
+    @patch("ml_pipeline.src.evaluate.mlflow")
+    def test_defaults(self, mock_mlflow: MagicMock) -> None:
+        from ml_pipeline.src.evaluate import configure_mlflow
+
+        with patch.dict(os.environ, {}, clear=True):
+            name = configure_mlflow("train")
+        mock_mlflow.set_experiment.assert_called_once()
+        assert name.startswith("train-")
+
+    @patch("ml_pipeline.src.evaluate.mlflow")
+    def test_custom_run_name(self, mock_mlflow: MagicMock) -> None:
+        from ml_pipeline.src.evaluate import configure_mlflow
+
+        env = {"MLFLOW_RUN_NAME": "my-custom-run"}
+        with patch.dict(os.environ, env, clear=True):
+            name = configure_mlflow("eval")
+        assert name == "my-custom-run"
+
+    @patch("ml_pipeline.src.evaluate.mlflow")
+    def test_tracking_uri_set(self, mock_mlflow: MagicMock) -> None:
+        from ml_pipeline.src.evaluate import configure_mlflow
+
+        env = {"MLFLOW_TRACKING_URI": "http://localhost:5000"}
+        with patch.dict(os.environ, env, clear=True):
+            configure_mlflow("eval")
+        mock_mlflow.set_tracking_uri.assert_called_once_with(
+            "http://localhost:5000"
+        )
+
+# ===========================================================================
+# Tests — evaluate.py: build_mlflow_tags
+# ===========================================================================
+
+class TestBuildMlflowTags:
+    """Tests for build_mlflow_tags."""
+
+    def test_filters_empty_values(self) -> None:
+        from ml_pipeline.src.evaluate import build_mlflow_tags
+
+        with patch.dict(os.environ, {}, clear=True):
+            tags = build_mlflow_tags(
+                "eval", "/m", "/p", "/e",
+            )
+        # Empty env vars should be filtered out
+        assert "pipeline.stage" in tags
+        assert tags["pipeline.stage"] == "eval"
+        assert all(v for v in tags.values())
+
+    def test_includes_manual_source(self) -> None:
+        from ml_pipeline.src.evaluate import build_mlflow_tags
+
+        env = {"PIPELINE_SOURCE": "airflow"}
+        with patch.dict(os.environ, env, clear=True):
+            tags = build_mlflow_tags(
+                "train", "/models", "/proc", "/eval",
+            )
+        assert tags["pipeline.source"] == "airflow"
+
+# ===========================================================================
+# Tests — evaluate.py: evaluate_threshold
+# ===========================================================================
+
+class TestEvaluateThreshold:
+    """Tests for evaluate_threshold."""
+
+    def test_returns_required_keys(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=0.10, max_threshold=0.90,
+        )
+        for key in ("threshold", "precision", "recall",
+                     "f1", "pr_auc", "roc_auc", "confusion_matrix"):
+            assert key in result, f"Missing key: {key}"
+
+    def test_metrics_in_valid_range(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=0.10, max_threshold=0.90,
+        )
+        assert 0.0 <= result["threshold"] <= 1.0
+        assert 0.0 <= result["precision"] <= 1.0
+        assert 0.0 <= result["recall"] <= 1.0
+        assert 0.0 <= result["f1"] <= 1.0
+
+    def test_with_output_dir(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        tmp_path: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=0.10, max_threshold=0.90,
+            output_dir=tmp_path,
+        )
+        assert (tmp_path / "pr_curve.png").exists()
+        assert result["threshold"] > 0
+
+    def test_relaxed_recall(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        # min_recall=1.0 may force relaxation
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=1.0, max_threshold=0.01,
+        )
+        assert "threshold" in result
+
+# ===========================================================================
+# Tests — evaluate.py: evaluate_segments
+# ===========================================================================
+
+class TestEvaluateSegments:
+    """Tests for evaluate_segments."""
+
+    def test_returns_all_segment_and_overall(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        test_df: pd.DataFrame,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_segments
+
+        report = evaluate_segments(
+            trained_model, X_test, y_test,
+            test_df, threshold=0.5,
+        )
+        assert isinstance(report, pd.DataFrame)
+        assert "ALL" in report["segment"].values
+
+    def test_missing_segment_col(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        test_df: pd.DataFrame,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_segments
+
+        df_no_seg = test_df.drop(
+            columns=["segment_encoded"], errors="ignore"
+        )
+        report = evaluate_segments(
+            trained_model, X_test, y_test,
+            df_no_seg, threshold=0.5,
+            segment_col="nonexistent_col",
+        )
+        # Should return only the ALL row
+        assert len(report) == 1
+        assert report.iloc[0]["segment"] == "ALL"
+
+# ===========================================================================
+# Tests — inference.py: predict_single
+# ===========================================================================
+
+class TestPredictSingle:
+    """Tests for FraudDetector.predict_single."""
+
+    def test_returns_required_keys(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        row = test_df.iloc[0].to_dict()
+        result = detector.predict_single(row)
+        for key in ("transaction_id", "fraud_score",
+                     "is_fraud_pred", "threshold", "risk_level"):
+            assert key in result
+
+    def test_score_in_unit_interval(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        row = test_df.iloc[0].to_dict()
+        result = detector.predict_single(row)
+        assert 0.0 <= result["fraud_score"] <= 1.0
+
+    def test_risk_level_is_valid(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        row = test_df.iloc[0].to_dict()
+        result = detector.predict_single(row)
+        assert result["risk_level"] in ("LOW", "MEDIUM", "HIGH")
+
+# ===========================================================================
+# Tests — inference.py: predict_batch (extended)
+# ===========================================================================
+
+class TestPredictBatchExtended:
+    """Extended tests for FraudDetector.predict_batch."""
+
+    def test_empty_raises(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            detector.predict_batch(pd.DataFrame())
+
+    def test_output_has_risk_level(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        result = detector.predict_batch(test_df.head(5))
+        assert "risk_level" in result.columns
+        assert set(result["risk_level"].unique()).issubset(
+            {"LOW", "MEDIUM", "HIGH"}
+        )
+
+    def test_is_fraud_pred_binary(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        result = detector.predict_batch(test_df.head(5))
+        assert set(result["is_fraud_pred"].unique()).issubset({0, 1})
+
+# ===========================================================================
+# Tests — inference.py: _risk_level
+# ===========================================================================
+
+class TestRiskLevel:
+    """Tests for FraudDetector._risk_level."""
+
+    def test_low(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        assert detector._risk_level(0.1) == "LOW"
+
+    def test_medium(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        assert detector._risk_level(0.5) == "MEDIUM"
+
+    def test_high(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        assert detector._risk_level(0.9) == "HIGH"
