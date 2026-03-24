@@ -86,7 +86,7 @@ jobs:
   # CD — Deploy to Google Cloud VPS (only on push to main or dev/ver2)
   # ---------------------------------------------------------------------------
   deploy:
-    needs: test
+    needs: [test, docker]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev/ver2')
     runs-on: ubuntu-latest
     environment: production
