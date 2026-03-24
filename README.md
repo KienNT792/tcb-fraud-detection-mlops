@@ -693,7 +693,7 @@ Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requ
 | **Deploy to GCP VPS** | SSH → `git pull` → `docker compose up -d --build` |
 | **Health Checks** | Poll FastAPI, MLflow, Airflow, Grafana — up to 10 retries × 10s |
 
-Required config: `SSH_DEPLOY_KEY` in Secrets, `GIT_AUTH_TOKEN` in Secrets if repo access needs auth, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables.
+Required config: `SSH_DEPLOY_KEY` in Secrets, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables.
 
 ---
 

@@ -65,16 +65,6 @@ Ghi nhớ:
 - `SSH_DEPLOY_KEY` phải là private key, thường bắt đầu bằng `-----BEGIN OPENSSH PRIVATE KEY-----`
 - public key tương ứng phải nằm trong `~/.ssh/authorized_keys` trên VPS
 
-### VPS -> GitHub repo
-
-- `GIT_AUTH_TOKEN`:
-  GitHub token dùng để VPS `git clone`, `git fetch`, `git pull` qua HTTPS
-
-Khuyến nghị:
-
-- dùng Fine-grained PAT
-- quyền tối thiểu: `Contents: Read-only` cho repo này
-
 ## 5. Cấu hình môi trường trên VPS
 
 Workflow deploy hiện kỳ vọng VPS đã có:
@@ -86,7 +76,7 @@ Workflow deploy hiện kỳ vọng VPS đã có:
 
 Thư mục deploy mặc định:
 
-- `/opt/tcb-fraud-detection-mlops`
+- `$HOME/tcb-fraud-detection-mlops`
 
 Biến môi trường runtime được đọc từ file `.env` trong thư mục deploy. Nếu file chưa tồn tại, workflow sẽ copy từ `.env.example`, nhưng bạn vẫn phải SSH vào VPS để thay bằng secret thật.
 
@@ -99,6 +89,5 @@ Biến môi trường runtime được đọc từ file `.env` trong thư mục 
 ## 7. Trạng thái triển khai nên nhớ
 
 - `SSH_DEPLOY_KEY` phục vụ kết nối SSH tới VPS
-- `GIT_AUTH_TOKEN` phục vụ Git auth từ VPS về GitHub
 - `GCP_DEPLOY_HOST` và `GCP_DEPLOY_USER` có thể để trong `Secrets` hoặc `Variables`
-- workflow hiện tự dùng URL của chính repo đang chạy, không cần cấu hình `GIT_REPO_URL`
+- workflow hiện tự dùng URL public của chính repo đang chạy, không cần cấu hình `GIT_REPO_URL`

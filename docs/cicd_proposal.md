@@ -95,6 +95,5 @@ GitHub Actions cần cấu hình Secrets:
 - `GCP_DEPLOY_USER` — SSH username (vd: `ubuntu`), có thể để ở Secrets hoặc Variables
 - `DEPLOY_PATH` — thư mục deploy trên VPS, có thể để ở Secrets hoặc Variables
 - `SSH_DEPLOY_KEY` — SSH private key dùng để Actions SSH vào VPS
-- `GIT_AUTH_TOKEN` — token dùng để VPS pull repo qua HTTPS nếu cần auth
 
 Tham khảo thêm hướng dẫn chuẩn bị VPS và cài public key tại `docs/cloud_ssh_setup.md`.

@@ -8,10 +8,10 @@ Tài liệu này mô tả phần chuẩn bị trên VPS để workflow [`ci-cd-p
 - `GCP_DEPLOY_USER`: user dùng để SSH vào VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `DEPLOY_PATH`: đường dẫn deploy trên VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `SSH_DEPLOY_KEY`: private key dùng cho GitHub Actions SSH vào VPS
-- `GIT_AUTH_TOKEN`: token để VPS `git clone` / `git pull` repo qua HTTPS
 
 Workflow hiện tự dùng URL của chính repo đang chạy workflow, nên không còn cần cấu hình `GIT_REPO_URL`.
 Nếu `DEPLOY_PATH` không phải đường dẫn tuyệt đối, workflow sẽ tự resolve thành `$HOME/<DEPLOY_PATH>`.
+Với repo public hiện tại, deploy không cần `GIT_AUTH_TOKEN`.
 
 ## 2. Phân biệt public key và private key
 
@@ -20,15 +20,6 @@ Nếu giá trị của bạn bắt đầu bằng `ssh-ed25519 AAAA...` thì đó
 - `SSH_DEPLOY_KEY` trên GitHub Actions phải là private key, thường bắt đầu bằng `-----BEGIN OPENSSH PRIVATE KEY-----`
 - Public key tương ứng mới là thứ cần thêm vào file `~/.ssh/authorized_keys` trên VPS
 - `GCP_DEPLOY_HOST` và `GCP_DEPLOY_USER` không bắt buộc là secret; repo `ci-cd-pipeline.yml` hiện đọc được cả từ `Secrets` lẫn `Variables`
-- `GIT_AUTH_TOKEN` nên để ở `Secrets`
-
-## 2.1. Yêu cầu cho `GIT_AUTH_TOKEN`
-
-Nếu repo là private hoặc bạn muốn dùng auth ổn định thay vì anonymous clone, tạo một GitHub token chỉ có quyền đọc repo.
-
-- Fine-grained PAT: cấp quyền `Contents: Read-only` cho repo này
-- Classic PAT: tối thiểu quyền `repo` nếu bạn không dùng fine-grained token
-
 ## 3. Cài đặt tối thiểu trên VPS
 
 Ví dụ cho Ubuntu:
@@ -117,7 +108,6 @@ sudo chown -R "$USER":"$USER" /opt/tcb-fraud-detection-mlops
 ```
 
 Workflow cũng sẽ tự tạo `.env` từ `.env.example` ở lần chạy đầu nếu file `.env` chưa tồn tại. Sau đó bạn vẫn phải SSH vào VPS để cập nhật secret thật trong file `.env`.
-Workflow sẽ dùng `GIT_AUTH_TOKEN` nếu secret này tồn tại; nếu không có, nó sẽ thử clone public repo qua HTTPS không cần auth.
 
 Các biến tối thiểu hiện repo đang dùng:
 
