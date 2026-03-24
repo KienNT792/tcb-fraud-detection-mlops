@@ -124,6 +124,16 @@ CD workflow sau đó sẽ chỉ SSH vào VPS và chạy:
 bash ./scripts/deploy_vps.sh
 ```
 
+Nếu muốn script deploy trên VPS tự đọc Docker Hub token từ local file, tạo:
+
+```bash
+cat > ~/.tcb_deploy_env <<'EOF'
+DOCKERHUB_USERNAME=tungb12ok
+DOCKERHUB_TOKEN=your_dockerhub_token
+EOF
+chmod 600 ~/.tcb_deploy_env
+```
+
 Các biến tối thiểu hiện repo đang dùng:
 
 - `MINIO_ROOT_USER`

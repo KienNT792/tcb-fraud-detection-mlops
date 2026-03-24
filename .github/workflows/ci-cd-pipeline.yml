@@ -103,7 +103,6 @@ jobs:
           DEPLOY_HOST: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -122,25 +121,17 @@ jobs:
             exit 1
           fi
 
-          if [ -z "${DOCKERHUB_TOKEN}" ]; then
-            echo "Missing Docker Hub token. Set DOCKERHUB_TOKEN in GitHub Secrets."
-            exit 1
-          fi
-
           echo "Deploy configuration looks present."
 
       - name: Deploy to Google Cloud VPS
         uses: appleboy/ssh-action@v1
-        env:
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_USERNAME: tungb12ok
         with:
           host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
           username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
           # SSH_DEPLOY_KEY must contain the private key content.
           # Install the matching public key in ~/.ssh/authorized_keys on the VPS.
           key: ${{ secrets.SSH_DEPLOY_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DOCKERHUB_TOKEN,DOCKERHUB_USERNAME
+          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG
           script: |
             set -euo pipefail
 

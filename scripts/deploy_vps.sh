@@ -5,6 +5,7 @@ set -euo pipefail
 DEPLOY_PATH_INPUT="${DEPLOY_PATH:-tcb-fraud-detection-mlops}"
 DEPLOY_REF="${DEPLOY_REF:-main}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$HOME/.tcb_deploy_env}"
 DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-tungb12ok}"
 
 if [[ "${DEPLOY_PATH_INPUT}" = /* ]]; then
@@ -30,11 +31,6 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -z "${DOCKERHUB_TOKEN:-}" ]]; then
-  echo "Missing DOCKERHUB_TOKEN."
-  exit 1
-fi
-
 if [[ ! -d "$DEPLOY_PATH" ]]; then
   echo "Deploy path does not exist: $DEPLOY_PATH"
   echo "Clone the repository manually on the VPS first."
@@ -57,9 +53,20 @@ git fetch --all --prune
 git checkout "$DEPLOY_REF"
 git pull --ff-only origin "$DEPLOY_REF"
 
+if [[ -f "$DEPLOY_ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  . "$DEPLOY_ENV_FILE"
+fi
+
 if [[ ! -f .env ]]; then
   cp .env.example .env
   echo "Created .env from .env.example. Update secrets before real production use."
+fi
+
+if [[ -z "${DOCKERHUB_TOKEN:-}" ]]; then
+  echo "Missing DOCKERHUB_TOKEN."
+  echo "Set it in the shell or save it in $DEPLOY_ENV_FILE"
+  exit 1
 fi
 
 set -a

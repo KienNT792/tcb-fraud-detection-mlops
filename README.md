@@ -693,7 +693,7 @@ Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requ
 | **Deploy to GCP VPS** | SSH → run `scripts/deploy_vps.sh` in existing repo |
 | **Health Checks** | Poll FastAPI, MLflow, Airflow, Grafana — up to 10 retries × 10s |
 
-Required config: `SSH_DEPLOY_KEY` and `DOCKERHUB_TOKEN` in Secrets, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables.
+Required config: `SSH_DEPLOY_KEY` and `DOCKERHUB_TOKEN` in Secrets for GitHub Actions, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables. On the VPS, `scripts/deploy_vps.sh` can read `DOCKERHUB_TOKEN` from `~/.tcb_deploy_env`.
 
 ---
 
