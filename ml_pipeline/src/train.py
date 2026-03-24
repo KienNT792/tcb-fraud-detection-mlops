@@ -38,10 +38,18 @@ try:
         register_model_from_run,
         transition_model_version_stage,
     )
+    from .runtime_bundle import (
+        RUNTIME_BUNDLE_ARTIFACT_PATH,
+        log_runtime_bundle,
+    )
 except ImportError:
     from model_registry import (
         register_model_from_run,
         transition_model_version_stage,
+    )
+    from runtime_bundle import (
+        RUNTIME_BUNDLE_ARTIFACT_PATH,
+        log_runtime_bundle,
     )
 from sklearn.metrics import (
     average_precision_score,
@@ -631,6 +639,19 @@ def run_training(
         model_info = mlflow.xgboost.log_model(model, "model")
         mlflow.log_artifact(str(out / METRICS_FILENAME))
         mlflow.log_artifact(str(out / FEATURE_IMPORTANCE_FILENAME))
+        log_runtime_bundle(
+            models_dir=models_dir,
+            processed_dir=processed_dir,
+            extra_metadata={
+                "training_run_id": mlflow.active_run().info.run_id,
+                "model_uri": model_info.model_uri,
+            },
+        )
+        mlflow.set_tag("runtime_bundle.ready", "true")
+        mlflow.set_tag(
+            "runtime_bundle.artifact_path",
+            RUNTIME_BUNDLE_ARTIFACT_PATH,
+        )
 
         if os.getenv("MLFLOW_REGISTER_MODEL", "true").lower() == "true":
             model_name = os.getenv(

@@ -12,6 +12,10 @@ DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-tungb12ok}"
 GIT_REMOTE_URL="${GIT_REMOTE_URL:-}"
 DEPLOY_REEXEC="${DEPLOY_REEXEC:-0}"
 APP_IMAGE_REPOSITORY="${APP_IMAGE_REPOSITORY:-tungb12ok/tcb-detect-credit}"
+SYNC_RUNTIME_BUNDLE_FROM_REGISTRY="${SYNC_RUNTIME_BUNDLE_FROM_REGISTRY:-true}"
+MLFLOW_REGISTERED_MODEL_NAME="${MLFLOW_REGISTERED_MODEL_NAME:-tcb-fraud-xgboost}"
+MLFLOW_DEPLOY_STAGE="${MLFLOW_DEPLOY_STAGE:-Production}"
+MLFLOW_RUNTIME_BUNDLE_PATH="${MLFLOW_RUNTIME_BUNDLE_PATH:-runtime_bundle}"
 
 if [[ "${DEPLOY_PATH_INPUT}" = /* ]]; then
   DEPLOY_PATH="${DEPLOY_PATH_INPUT}"
@@ -25,6 +29,43 @@ require_cmd() {
     echo "Missing required command on VPS: $cmd"
     exit 1
   fi
+}
+
+show_health_failure_context() {
+  local failed_name="$1"
+  local failed_endpoint="$2"
+
+  echo "Health check failed for ${failed_name}: ${failed_endpoint}"
+  echo "docker compose ps:"
+  IMAGE_TAG="$IMAGE_TAG" docker compose ps || true
+
+  echo "Recent logs: fastapi-stable"
+  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 fastapi-stable || true
+
+  echo "Recent logs: fastapi-candidate"
+  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 fastapi-candidate || true
+
+  echo "Recent logs: loadbalancer"
+  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 loadbalancer || true
+}
+
+wait_for_endpoint() {
+  local name="$1"
+  local endpoint="$2"
+  local max_attempts="${3:-18}"
+  local sleep_seconds="${4:-5}"
+
+  echo "Waiting for ${name} at ${endpoint}..."
+  for attempt in $(seq 1 "$max_attempts"); do
+    if curl --fail --silent --show-error "$endpoint" >/dev/null 2>&1; then
+      echo "  ${name} is ready."
+      return 0
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  echo "Timed out waiting for ${name} at ${endpoint}"
+  return 1
 }
 
 sync_runtime_env_file() {
@@ -158,6 +199,10 @@ set -a
 . ./.env
 set +a
 
+AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-$MINIO_ROOT_USER}"
+AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-$MINIO_ROOT_PASSWORD}"
+export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+
 # Keep the immutable image tag passed from the workflow.
 # Local .env may keep IMAGE_TAG=local for development, but CD must deploy the pushed SHA tag.
 IMAGE_TAG="$DEPLOY_IMAGE_TAG"
@@ -217,11 +262,13 @@ fi
 
 IMAGE_TAG="$IMAGE_TAG" docker compose config >/dev/null
 
-HEALTH_ENDPOINTS=(
-  "http://localhost:${FASTAPI_PORT:-8000}/health"
-  "http://localhost:${MLFLOW_PORT:-5000}"
-  "http://localhost:${AIRFLOW_PORT:-8080}/health"
-  "http://localhost:${GRAFANA_PORT:-3000}/api/health"
+HEALTH_CHECKS=(
+  "fastapi-stable|http://127.0.0.1:${FASTAPI_STABLE_PORT:-8002}/health"
+  "fastapi-candidate|http://127.0.0.1:${FASTAPI_CANDIDATE_PORT:-8003}/health"
+  "loadbalancer|http://localhost:${FASTAPI_PORT:-8000}/health"
+  "mlflow|http://localhost:${MLFLOW_PORT:-5000}"
+  "airflow|http://localhost:${AIRFLOW_PORT:-8080}/health"
+  "grafana|http://localhost:${GRAFANA_PORT:-3000}/api/health"
 )
 
 printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
@@ -230,20 +277,54 @@ echo "Pulling application image: ${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 docker pull "${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
 IMAGE_TAG="$IMAGE_TAG" docker compose pull
+IMAGE_TAG="$IMAGE_TAG" docker compose up -d minio minio-init mlflow
+
+wait_for_endpoint "mlflow" "http://127.0.0.1:${MLFLOW_PORT:-5000}" 24 5
+
+if [[ "$SYNC_RUNTIME_BUNDLE_FROM_REGISTRY" == "true" ]]; then
+  echo "Syncing runtime bundle from MLflow Registry stage=${MLFLOW_DEPLOY_STAGE}"
+  if ! docker run --rm \
+    --network host \
+    --user "$(id -u):$(id -g)" \
+    -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+    -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+    -e MLFLOW_S3_ENDPOINT_URL="http://127.0.0.1:${MINIO_API_PORT:-9000}" \
+    -v "$DEPLOY_PATH:/workspace" \
+    -w /workspace \
+    ghcr.io/mlflow/mlflow:v2.14.3 \
+    python scripts/runtime_bundle_registry.py \
+      --tracking-uri "http://127.0.0.1:${MLFLOW_PORT:-5000}" \
+      download-stage \
+      --model-name "$MLFLOW_REGISTERED_MODEL_NAME" \
+      --stage "$MLFLOW_DEPLOY_STAGE" \
+      --artifact-path "$MLFLOW_RUNTIME_BUNDLE_PATH" \
+      --output-root /workspace; then
+    echo "Failed to sync runtime bundle from MLflow Registry."
+    echo "If the current Production model was trained before runtime bundles were published,"
+    echo "backfill it once from a machine that already has models/ and data/processed/:"
+    echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} publish-run --run-id <training_run_id>"
+    exit 1
+  fi
+fi
+
 IMAGE_TAG="$IMAGE_TAG" docker compose up -d --no-build --remove-orphans
 
 echo "Waiting for services to become healthy..."
 sleep 20
 
-for endpoint in "${HEALTH_ENDPOINTS[@]}"; do
-  echo "Checking ${endpoint}..."
+for check in "${HEALTH_CHECKS[@]}"; do
+  check_name="${check%%|*}"
+  endpoint="${check#*|}"
+
+  echo "Checking ${check_name} (${endpoint})..."
   for attempt in $(seq 1 10); do
     if curl --fail --silent --show-error "$endpoint" >/dev/null 2>&1; then
-      echo "  OK ${endpoint}"
+      echo "  OK ${check_name}"
       break
     fi
     if [[ "$attempt" -eq 10 ]]; then
-      echo "  FAIL ${endpoint}"
+      echo "  FAIL ${check_name}"
+      show_health_failure_context "$check_name" "$endpoint"
       exit 1
     fi
     sleep 10
