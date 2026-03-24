@@ -76,11 +76,42 @@ jobs:
       IMAGE_TAG: ${{ github.ref_name }}-${{ github.run_number }}
 
     steps:
+      - name: Validate deploy configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
+          DEPLOY_REPO_URL: ${{ secrets.GIT_REPO_URL || vars.GIT_REPO_URL }}
+          DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_HOST}" ]; then
+            echo "Missing deploy host. Set GCP_DEPLOY_HOST in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_USER}" ]; then
+            echo "Missing deploy user. Set GCP_DEPLOY_USER in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_REPO_URL}" ]; then
+            echo "Missing repo URL. Set GIT_REPO_URL in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_SSH_KEY}" ]; then
+            echo "Missing SSH key. Set SSH_DEPLOY_KEY in GitHub Secrets."
+            exit 1
+          fi
+
+          echo "Deploy configuration looks present."
+
       - name: Deploy to Google Cloud VPS
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.GCP_DEPLOY_HOST }}
-          username: ${{ secrets.GCP_DEPLOY_USER }}
+          host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
+          username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
           # SSH_DEPLOY_KEY must contain the private key content.
           # Install the matching public key in ~/.ssh/authorized_keys on the VPS.
           key: ${{ secrets.SSH_DEPLOY_KEY }}
@@ -93,7 +124,7 @@ jobs:
 
             # Clone repo nếu chưa có, hoặc fetch + pull
             if [ ! -d .git ]; then
-              git clone ${{ secrets.GIT_REPO_URL }} .
+              git clone ${{ secrets.GIT_REPO_URL || vars.GIT_REPO_URL }} .
             fi
 
             git fetch --all --prune
@@ -115,8 +146,8 @@ jobs:
       - name: Health check — FastAPI (Stable)
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.GCP_DEPLOY_HOST }}
-          username: ${{ secrets.GCP_DEPLOY_USER }}
+          host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
+          username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
           key: ${{ secrets.SSH_DEPLOY_KEY }}
           envs: DEPLOY_PATH
           script: |
