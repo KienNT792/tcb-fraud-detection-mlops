@@ -12,9 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from serving_api.app import main as main_module
-
-app = main_module.app
+# Deferred import in fixture
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +106,9 @@ def make_mock_detector(
 
 @pytest.fixture()
 def client():
+    from serving_api.app import main as main_module
+    app = main_module.app
+
     """TestClient with mocked FraudDetector injected via dependency override."""
     mock_detector = make_mock_detector()
     app.dependency_overrides[main_module.get_detector] = lambda: mock_detector
