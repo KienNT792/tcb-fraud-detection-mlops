@@ -11,6 +11,7 @@ DEPLOY_ENV_B64="${DEPLOY_ENV_B64:-}"
 DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-tungb12ok}"
 GIT_REMOTE_URL="${GIT_REMOTE_URL:-}"
 DEPLOY_REEXEC="${DEPLOY_REEXEC:-0}"
+APP_IMAGE_REPOSITORY="${APP_IMAGE_REPOSITORY:-tungb12ok/tcb-detect-credit}"
 
 if [[ "${DEPLOY_PATH_INPUT}" = /* ]]; then
   DEPLOY_PATH="${DEPLOY_PATH_INPUT}"
@@ -224,6 +225,9 @@ HEALTH_ENDPOINTS=(
 )
 
 printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+echo "Pulling application image: ${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+docker pull "${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
 IMAGE_TAG="$IMAGE_TAG" docker compose pull
 IMAGE_TAG="$IMAGE_TAG" docker compose up -d --no-build --remove-orphans
