@@ -420,7 +420,9 @@ def evaluate_model(
     logger.info("-" * 40)
     logger.info("  Confusion Matrix (threshold=%.2f):", threshold)
     logger.info("    TN=%d | FP=%d | FN=%d | TP=%d", tn, fp, fn, tp)
-    logger.info("  Best XGBoost iteration: %d", model.best_iteration)
+    best_iter = getattr(model, "best_iteration", None) \
+        or (model.n_estimators - 1)
+    logger.info("  Best XGBoost iteration: %d", best_iter)
     logger.info("=" * 60)
 
     return metrics
