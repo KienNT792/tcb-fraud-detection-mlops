@@ -20,8 +20,9 @@ def reset_singleton():
 
 class TestGetDetector:
     def test_raises_if_not_loaded(self):
-        with pytest.raises(RuntimeError, match="not loaded"):
-            model_loader.get_detector()
+        with patch("serving_api.app.model_loader.load_model", return_value=None):
+            with pytest.raises(RuntimeError, match="not loaded"):
+                model_loader.get_detector()
 
     def test_returns_instance_after_load(self):
         mock_detector = MagicMock()
@@ -61,8 +62,9 @@ class TestUnloadModel:
         with patch("serving_api.app.model_loader.FraudDetector", return_value=mock_detector):
             model_loader.load_model()
         model_loader.unload_model()
-        with pytest.raises(RuntimeError):
-            model_loader.get_detector()
+        with patch("serving_api.app.model_loader.load_model", return_value=None):
+            with pytest.raises(RuntimeError):
+                model_loader.get_detector()
 
     def test_unload_idempotent(self):
         """Calling unload when already unloaded should not raise."""
