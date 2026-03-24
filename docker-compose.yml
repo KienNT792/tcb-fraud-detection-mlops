@@ -152,7 +152,7 @@ services:
       /opt/airflow/venv/bin/python -m pip install --no-cache-dir -r /opt/airflow/project/ml_pipeline/requirements-airflow.txt &&
       export PATH=/opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin:$$PATH &&
       export PYTHONPATH=/home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project:$$PYTHONPATH &&
-      exec airflow standalone
+      exec /home/airflow/.local/bin/airflow standalone
       "
     env_file:
       - .env
@@ -161,6 +161,9 @@ services:
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
+      AIRFLOW__WEBSERVER__WORKERS: "1"
+      AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "300"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "300"
       AIRFLOW_VENV_PYTHON: /opt/airflow/venv/bin/python
       PATH: /opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin
       PYTHONPATH: /home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project
