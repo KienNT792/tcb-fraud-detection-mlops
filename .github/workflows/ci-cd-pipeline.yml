@@ -1,15 +1,19 @@
-name: Repository CI Guard
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
+      - dev/ver2
   pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# ---------------------------------------------------------------------------
+# CI — Lint, Test(coverage >80%), Docker Build
+# ---------------------------------------------------------------------------
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -41,6 +45,15 @@ jobs:
             --cov-report=term-missing \
             --cov-fail-under=80
 
+      - name: Test model pipeline with coverage gate
+        run: |
+          pytest ml_pipeline/tests/test_model.py \
+            --cov=ml_pipeline.src.train \
+            --cov=ml_pipeline.src.evaluate \
+            --cov=ml_pipeline.src.inference \
+            --cov-report=term-missing \
+            --cov-fail-under=80
+
       - name: Test serving API with coverage gate
         run: |
           pytest serving_api/tests \
@@ -50,4 +63,94 @@ jobs:
             --cov-fail-under=80
 
       - name: Build Docker image
-        run: docker build --file serving_api/Dockerfile --tag tcb-fraud-fastapi:ci .
+        run: |
+          docker build \
+            --file serving_api/Dockerfile \
+            --tag tcb-fraud-fastapi:${{ github.sha }} \
+            .
+
+  # ---------------------------------------------------------------------------
+  # CD — Deploy to Google Cloud VPS (only on push to main or dev/ver2)
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: ci
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev/ver2')
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      DEPLOY_PATH: /opt/tcb-fraud-detection-mlops
+      DEPLOY_REF: ${{ github.ref_name }}
+      IMAGE_TAG: ${{ github.ref_name }}-${{ github.run_number }}
+
+    steps:
+      - name: Deploy to Google Cloud VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCP_DEPLOY_HOST }}
+          username: ${{ secrets.GCP_DEPLOY_USER }}
+          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG
+          script: |
+            set -euo pipefail
+
+            mkdir -p $DEPLOY_PATH
+            cd $DEPLOY_PATH
+
+            # Clone repo nếu chưa có, hoặc fetch + pull
+            if [ ! -d .git ]; then
+              git clone ${{ secrets.GIT_REPO_URL }} .
+            fi
+
+            git fetch --all --prune
+            git checkout $DEPLOY_REF
+            git pull origin $DEPLOY_REF
+
+            # Tạo .env từ .env.example nếu chưa tồn tại
+            if [ ! -f .env ]; then
+              cp .env.example .env
+              echo "⚠️  Created .env from .env.example — review and update secrets!"
+            fi
+
+            # Build và deploy containers
+            IMAGE_TAG=$IMAGE_TAG docker compose up -d --build
+
+      - name: Wait for services to start
+        run: sleep 20
+
+      - name: Health check — FastAPI (Stable)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCP_DEPLOY_HOST }}
+          username: ${{ secrets.GCP_DEPLOY_USER }}
+          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          envs: DEPLOY_PATH
+          script: |
+            set -euo pipefail
+            cd $DEPLOY_PATH
+            set -a && . ./.env && set +a
+
+            for endpoint in \
+              "http://localhost:${FASTAPI_PORT:-8000}/health" \
+              "http://localhost:${MLFLOW_PORT:-5000}" \
+              "http://localhost:${AIRFLOW_PORT:-8080}/health" \
+              "http://localhost:${GRAFANA_PORT:-3000}/api/health"; do
+
+              echo "Checking ${endpoint}..."
+              for attempt in $(seq 1 10); do
+                if curl --fail --silent --show-error "$endpoint" > /dev/null 2>&1; then
+                  echo "  ✓ ${endpoint} is healthy"
+                  break
+                fi
+                if [ "$attempt" -eq 10 ]; then
+                  echo "  ✗ ${endpoint} failed after 10 attempts"
+                  exit 1
+                fi
+                sleep 10
+              done
+            done
+
+            echo ""
+            echo "============================================"
+            echo "  All health checks passed!"
+            echo "============================================"

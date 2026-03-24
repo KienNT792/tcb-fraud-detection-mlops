@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Promote a registered MLflow model version to a target stage.",
+        description=(
+            "Promote a registered MLflow model"
+            " version to a target stage."
+        ),
     )
     parser.add_argument(
         "--model-name",
@@ -59,7 +62,9 @@ def main() -> None:
         )
         if resolved is None:
             raise RuntimeError(
-                f"No model version found for model={args.model_name} run_id={args.run_id}"
+                f"No model version found for"
+                f" model={args.model_name}"
+                f" run_id={args.run_id}"
             )
         version = resolved
 

@@ -65,7 +65,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         detector = load_model()
         bootstrap_observability(detector)
         if detector is None:
-            logger.warning("No model loaded at startup. Service is in standby mode.")
+            logger.warning(
+                "No model loaded at startup."
+                " Service is in standby mode."
+            )
         else:
             logger.info("Model loaded successfully. API ready.")
     except FileNotFoundError as exc:
@@ -265,7 +268,9 @@ async def admin_reload() -> JSONResponse:
 
     runtime = DeploymentResponse(**get_runtime_info()).model_dump()
     response_code = (
-        status.HTTP_200_OK if runtime["model_loaded"] else status.HTTP_202_ACCEPTED
+        status.HTTP_200_OK
+        if runtime["model_loaded"]
+        else status.HTTP_202_ACCEPTED
     )
     return JSONResponse(status_code=response_code, content=runtime)
 

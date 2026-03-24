@@ -27,11 +27,16 @@ load_dotenv(REPO_ROOT / ".env", override=False)
 
 os.environ.setdefault("MLFLOW_TRACKING_URI", "http://localhost:5000")
 os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
-os.environ.setdefault("AWS_ACCESS_KEY_ID", os.getenv("MINIO_ROOT_USER", "minioadmin"))
+os.environ.setdefault("AWS_ACCESS_KEY_ID", os.getenv("MINIO_ROOT_USER", ""))
 os.environ.setdefault(
     "AWS_SECRET_ACCESS_KEY",
-    os.getenv("MINIO_ROOT_PASSWORD", "minioadmin123"),
+    os.getenv("MINIO_ROOT_PASSWORD", ""),
 )
+if not os.environ.get("AWS_ACCESS_KEY_ID") or not os.environ.get("AWS_SECRET_ACCESS_KEY"):
+    raise EnvironmentError(
+        "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (or MINIO_ROOT_USER / "
+        "MINIO_ROOT_PASSWORD) must be set. Configure them in .env file."
+    )
 
 logging.basicConfig(
     level=logging.INFO,

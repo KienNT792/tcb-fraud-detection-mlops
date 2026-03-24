@@ -271,6 +271,7 @@ def evaluate_segments(
     test_df: pd.DataFrame,
     threshold: float,
     segment_col: str = "segment_encoded",
+    segment_reverse_map: dict[int, str] | None = None,
 ) -> pd.DataFrame:
 
     y_prob = model.predict_proba(X_test)[:, 1]
@@ -304,8 +305,9 @@ def evaluate_segments(
         y_pb = y_prob[mask]
 
         n_fraud = int(y_t.sum())
+        seg_label = segment_reverse_map.get(int(seg), str(seg)) if segment_reverse_map else str(seg)
         row: dict[str, Any] = {
-            "segment":    int(seg),
+            "segment":    seg_label,
             "n_samples":  int(mask.sum()),
             "n_fraud":    n_fraud,
             "fraud_rate": round(float(y_t.mean() * 100), 2),
@@ -493,6 +495,24 @@ def run_evaluation(
     # Load full test DF for segment analysis (needs segment_encoded column)
     test_df = pd.read_parquet(Path(processed_dir) / "test.parquet")
 
+    # Load segment label map for human-readable tier names in reports
+    seg_map_path = Path(processed_dir) / "segment_label_map.json"
+    segment_reverse_map: dict[int, str] | None = None
+    if seg_map_path.exists():
+        with open(seg_map_path, encoding="utf-8") as fh:
+            raw_map: dict[str, int] = json.load(fh)
+        segment_reverse_map = {v: k for k, v in raw_map.items()}
+        logger.info(
+            "Segment label map loaded: %s",
+            segment_reverse_map,
+        )
+    else:
+        logger.warning(
+            "segment_label_map.json not found at %s — "
+            "segment report will use integer labels.",
+            seg_map_path,
+        )
+
     with mlflow.start_run(run_name=run_name):
         mlflow.set_tags(
             build_mlflow_tags(
@@ -525,6 +545,7 @@ def run_evaluation(
         segment_report = evaluate_segments(
             model, X_test, y_test, test_df,
             threshold=optimal_threshold,
+            segment_reverse_map=segment_reverse_map,
         )
 
         # Step 4 — SHAP

@@ -151,8 +151,7 @@ tcb-fraud-detection-mlops/
 │   ├── architecture.drawio         #   Editable architecture diagram
 │   └── cicd_proposal.md            #   Deployment flow + environment setup guide
 │
-├── .github/workflows/              #   GitHub Actions CI (lint + test + Docker build)
-├── Jenkinsfile                     #   145 lines — 5-stage Jenkins CI/CD pipeline
+├── .github/workflows/              #   GitHub Actions CI/CD (lint + test + build + deploy)
 ├── docker-compose.yml              #   8 services: fastapi, mlflow, minio, airflow,
 │                                   #   prometheus, grafana, node-exporter, cadvisor
 ├── .env.example                    #   All required environment variables with defaults
@@ -670,25 +669,31 @@ Gate result (`PASS` / `FAIL`) is saved in `evaluation.json` and tagged in MLflow
 
 ## 🚢 CI/CD Pipeline
 
-### Jenkins (`Jenkinsfile`)
+### GitHub Actions (`.github/workflows/ci-cd-pipeline.yml`)
 
-5-stage pipeline triggered on **GitHub push** (via `githubPush()` webhook):
+Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requests**:
+
+#### CI Job (runs on every push/PR)
 
 | Stage | Description |
 |---|---|
-| **Checkout** | `checkout scm` |
-| **Install Dependencies** | Create venv, install `flake8 + pytest + requirements.txt` |
+| **Checkout** | `actions/checkout@v4` |
+| **Setup Python** | Python 3.10 via `actions/setup-python@v5` |
+| **Install Dependencies** | `pip install flake8 pytest pytest-cov` + project requirements |
 | **Lint** | `flake8 ml_pipeline/src serving_api/app dags` |
-| **Unit & Integration Tests** | `pytest` with `--cov-fail-under=80` for both `ml_pipeline` and `serving_api` |
-| **Build Docker Image** | `docker build --file serving_api/Dockerfile` → tag `tcb-fraud-fastapi:<branch>-<build#>` |
-| **Deploy to Google Cloud VPS** | SSH to VPS, `git pull`, `docker compose up -d --build` (only on `main` / `dev/ver2`) |
-| **Post-Deploy Health Checks** | Poll `/health` (FastAPI), MLflow, Airflow, Grafana — up to 10 retries × 10s |
+| **Test Preprocessing** | `pytest test_preprocess.py --cov-fail-under=80` |
+| **Test Model Pipeline** | `pytest test_model.py --cov-fail-under=80` (train + evaluate + inference) |
+| **Test Serving API** | `pytest serving_api/tests --cov-fail-under=80` |
+| **Build Docker Image** | `docker build --file serving_api/Dockerfile` → tag `tcb-fraud-fastapi:<sha>` |
 
-Credentials: `gcp-vps-ssh` Jenkins credential (SSH key pair).
+#### CD Job (only on push to `main` / `dev/ver2`)
 
-### GitHub Actions (`.github/workflows/`)
+| Stage | Description |
+|---|---|
+| **Deploy to GCP VPS** | SSH → `git pull` → `docker compose up -d --build` |
+| **Health Checks** | Poll FastAPI, MLflow, Airflow, Grafana — up to 10 retries × 10s |
 
-Runs CI checks on every push/PR: Python setup, flake8 linting, pytest coverage assertion, Docker build validation.
+Secrets required: `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, `GCP_SSH_PRIVATE_KEY`, `GIT_REPO_URL`.
 
 ---
 
@@ -699,10 +704,18 @@ Schedule: **`0 2 * * *`** (daily at 02:00 UTC)
 Max active runs: 1 (no concurrent retraining)
 
 ```python
-preprocess >> train >> evaluate
+check_model_quality >> [preprocess, skip_retraining]
+preprocess >> train >> evaluate >> stage_candidate >> verify_candidate
 ```
 
-Each task is a `BashOperator` running the corresponding `ml_pipeline/src/*.py` script. Environment variables (`MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`) are injected automatically from the Airflow container's environment.
+| Task | Type | Description |
+|---|---|---|
+| `check_model_quality` | BranchPythonOperator | Query MLflow `eval_f1` vs threshold (0.80) |
+| `preprocess` | BashOperator | Run `preprocess.py` |
+| `train` | BashOperator | Run `train.py` + MLflow Registry |
+| `evaluate` | BashOperator | Run `evaluate.py` + SHAP |
+| `stage_candidate` | PythonOperator | Copy artifacts to candidate dir + write manifest |
+| `verify_candidate` | PythonOperator | Poll candidate FastAPI `/health` to confirm model loaded |
 
 ---
 
@@ -732,7 +745,7 @@ pytest serving_api/tests/ --cov=serving_api.app --cov-report=term-missing --cov-
 |---|---|---|
 | `ml_pipeline.src` | > 80% | `pytest --cov-fail-under=80` |
 | `serving_api.app` | > 80% | `pytest --cov-fail-under=80` |
-| Jenkins CI | > 80% | `--cov-fail-under=80` gate (blocks deployment) |
+| GitHub Actions CI | > 80% | `--cov-fail-under=80` gate (blocks deployment) |
 
 ---
 
@@ -755,8 +768,7 @@ pytest serving_api/tests/ --cov=serving_api.app --cov-report=term-missing --cov-
 | Metrics Collection | Prometheus, prometheus-client | — , 0.21.0 |
 | Dashboarding | Grafana | 12.4.1 |
 | Orchestration | Apache Airflow | 2.10.3-python3.10 |
-| CI/CD (deploy) | Jenkins | — |
-| CI/CD (guard) | GitHub Actions | — |
+| CI/CD | GitHub Actions | CI + CD (deploy to GCP VPS) |
 | Testing | pytest, pytest-cov | 8.2.2, 5.0.0 |
 | HTTP Testing | httpx (FastAPI TestClient) | 0.27.0 |
 | Linting | flake8 | — |

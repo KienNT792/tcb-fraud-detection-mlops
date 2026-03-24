@@ -649,7 +649,9 @@ def run_training(
             mlflow.set_tag("registry.version", str(version))
             mlflow.set_tag("registry.stage", stage)
             logger.info(
-                "MLflow model registry updated | model=%s | version=%s | stage=%s | uri=%s",
+                "MLflow model registry updated"
+                " | model=%s | version=%s"
+                " | stage=%s | uri=%s",
                 model_name,
                 version,
                 stage,
