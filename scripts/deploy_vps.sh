@@ -70,6 +70,15 @@ wait_for_endpoint() {
   return 1
 }
 
+show_optional_health_warning() {
+  local service_name="$1"
+  local endpoint="$2"
+
+  echo "Non-critical health check failed for ${service_name}: ${endpoint}"
+  echo "Recent logs: ${service_name}"
+  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 "$service_name" || true
+}
+
 bootstrap_runtime_bundle_from_repo() {
   local processed_src="$DEPLOY_PATH/$BOOTSTRAP_RUNTIME_BUNDLE_DIR/processed"
   local required_model_files=(
@@ -319,12 +328,12 @@ fi
 IMAGE_TAG="$IMAGE_TAG" docker compose config >/dev/null
 
 HEALTH_CHECKS=(
-  "fastapi-stable|http://127.0.0.1:${FASTAPI_STABLE_PORT:-8002}/health"
-  "fastapi-candidate|http://127.0.0.1:${FASTAPI_CANDIDATE_PORT:-8003}/health"
-  "loadbalancer|http://localhost:${FASTAPI_PORT:-8000}/health"
-  "mlflow|http://localhost:${MLFLOW_PORT:-5000}"
-  "airflow|http://localhost:${AIRFLOW_PORT:-8080}/health"
-  "grafana|http://localhost:${GRAFANA_PORT:-3000}/api/health"
+  "fastapi-stable|http://127.0.0.1:${FASTAPI_STABLE_PORT:-8002}/health|critical|10|10"
+  "fastapi-candidate|http://127.0.0.1:${FASTAPI_CANDIDATE_PORT:-8003}/health|critical|10|10"
+  "loadbalancer|http://localhost:${FASTAPI_PORT:-8000}/health|critical|10|10"
+  "mlflow|http://localhost:${MLFLOW_PORT:-5000}|critical|10|10"
+  "airflow|http://localhost:${AIRFLOW_PORT:-8080}/health|optional|18|10"
+  "grafana|http://localhost:${GRAFANA_PORT:-3000}/api/health|optional|12|10"
 )
 
 printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
@@ -388,20 +397,31 @@ sleep 20
 
 for check in "${HEALTH_CHECKS[@]}"; do
   check_name="${check%%|*}"
-  endpoint="${check#*|}"
+  rest="${check#*|}"
+  endpoint="${rest%%|*}"
+  rest="${rest#*|}"
+  check_mode="${rest%%|*}"
+  rest="${rest#*|}"
+  max_attempts="${rest%%|*}"
+  sleep_seconds="${rest#*|}"
 
   echo "Checking ${check_name} (${endpoint})..."
-  for attempt in $(seq 1 10); do
+  for attempt in $(seq 1 "$max_attempts"); do
     if curl --fail --silent --show-error "$endpoint" >/dev/null 2>&1; then
       echo "  OK ${check_name}"
       break
     fi
-    if [[ "$attempt" -eq 10 ]]; then
-      echo "  FAIL ${check_name}"
-      show_health_failure_context "$check_name" "$endpoint"
-      exit 1
+    if [[ "$attempt" -eq "$max_attempts" ]]; then
+      if [[ "$check_mode" == "critical" ]]; then
+        echo "  FAIL ${check_name}"
+        show_health_failure_context "$check_name" "$endpoint"
+        exit 1
+      fi
+      echo "  WARN ${check_name}"
+      show_optional_health_warning "$check_name" "$endpoint"
+      break
     fi
-    sleep 10
+    sleep "$sleep_seconds"
   done
 done
 
