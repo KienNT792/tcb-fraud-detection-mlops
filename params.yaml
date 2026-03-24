@@ -1,0 +1,13 @@
+mlflow:
+  registered_model_name: tcb-fraud-xgboost
+  register_stage: Staging
+  promote_stage: Production
+
+rollout:
+  candidate_percent: 10
+  rollback_percent: 0
+
+monitoring:
+  drift_alert_ratio: 0.2
+  latency_p95_seconds: 1.0
+  error_rate_ratio: 0.05

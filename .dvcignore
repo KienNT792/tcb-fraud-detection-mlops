@@ -1,0 +1,4 @@
+volumes/
+ml_pipeline/mlruns/
+__pycache__/
+*.pyc
