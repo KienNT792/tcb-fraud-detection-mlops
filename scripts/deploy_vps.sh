@@ -10,6 +10,7 @@ DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-}"
 DEPLOY_ENV_B64="${DEPLOY_ENV_B64:-}"
 DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-tungb12ok}"
 GIT_REMOTE_URL="${GIT_REMOTE_URL:-}"
+DEPLOY_REEXEC="${DEPLOY_REEXEC:-0}"
 
 if [[ "${DEPLOY_PATH_INPUT}" = /* ]]; then
   DEPLOY_PATH="${DEPLOY_PATH_INPUT}"
@@ -124,9 +125,19 @@ echo "Git remote: ${GIT_REMOTE_URL:-<existing remote>}"
 echo "SSH user: $(id -un)"
 echo "HOME: ${HOME:-<unset>}"
 
+current_rev="$(git rev-parse HEAD)"
+
 git fetch --all --prune
 git checkout "$DEPLOY_REF"
 git pull --ff-only origin "$DEPLOY_REF"
+
+updated_rev="$(git rev-parse HEAD)"
+
+if [[ "$DEPLOY_REEXEC" != "1" && "$current_rev" != "$updated_rev" ]]; then
+  echo "Repository updated from $current_rev to $updated_rev. Re-executing deploy script."
+  export DEPLOY_REEXEC=1
+  exec bash ./scripts/deploy_vps.sh
+fi
 
 if [[ -z "$DEPLOY_ENV_FILE" ]]; then
   DEPLOY_ENV_FILE="$(resolve_deploy_env_file || true)"
