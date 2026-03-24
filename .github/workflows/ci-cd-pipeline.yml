@@ -88,7 +88,9 @@ jobs:
         with:
           host: ${{ secrets.GCP_DEPLOY_HOST }}
           username: ${{ secrets.GCP_DEPLOY_USER }}
-          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          # SSH_DEPLOY_KEY must contain the private key content.
+          # Install the matching public key in ~/.ssh/authorized_keys on the VPS.
+          key: ${{ secrets.SSH_DEPLOY_KEY }}
           envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG
           script: |
             set -euo pipefail
@@ -122,7 +124,7 @@ jobs:
         with:
           host: ${{ secrets.GCP_DEPLOY_HOST }}
           username: ${{ secrets.GCP_DEPLOY_USER }}
-          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          key: ${{ secrets.SSH_DEPLOY_KEY }}
           envs: DEPLOY_PATH
           script: |
             set -euo pipefail

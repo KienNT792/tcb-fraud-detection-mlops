@@ -93,5 +93,7 @@ GitHub Actions cần cấu hình Secrets:
 
 - `GCP_DEPLOY_HOST` — IP của GCP VPS
 - `GCP_DEPLOY_USER` — SSH username (vd: `ubuntu`)
-- `GCP_SSH_PRIVATE_KEY` — SSH private key
+- `SSH_DEPLOY_KEY` — SSH private key dùng để Actions SSH vào VPS
 - `GIT_REPO_URL` — URL clone repo
+
+Tham khảo thêm hướng dẫn chuẩn bị VPS và cài public key tại `docs/cloud_ssh_setup.md`.
