@@ -6,10 +6,12 @@ Tài liệu này mô tả phần chuẩn bị trên VPS để workflow [`ci-cd-p
 
 - `GCP_DEPLOY_HOST`: IP hoặc DNS của VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `GCP_DEPLOY_USER`: user dùng để SSH vào VPS, có thể lưu ở `Secrets` hoặc `Variables`
+- `DEPLOY_PATH`: đường dẫn deploy trên VPS, có thể lưu ở `Secrets` hoặc `Variables`
 - `SSH_DEPLOY_KEY`: private key dùng cho GitHub Actions SSH vào VPS
 - `GIT_AUTH_TOKEN`: token để VPS `git clone` / `git pull` repo qua HTTPS
 
 Workflow hiện tự dùng URL của chính repo đang chạy workflow, nên không còn cần cấu hình `GIT_REPO_URL`.
+Nếu `DEPLOY_PATH` không phải đường dẫn tuyệt đối, workflow sẽ tự resolve thành `$HOME/<DEPLOY_PATH>`.
 
 ## 2. Phân biệt public key và private key
 
@@ -36,8 +38,6 @@ sudo apt-get update
 sudo apt-get install -y git curl ca-certificates docker.io docker-compose-plugin
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
-sudo mkdir -p /opt/tcb-fraud-detection-mlops
-sudo chown -R "$USER":"$USER" /opt/tcb-fraud-detection-mlops
 ```
 
 Đăng xuất và đăng nhập lại sau khi thêm user vào group `docker`, rồi kiểm tra:
@@ -64,9 +64,18 @@ Nếu bạn đang dùng đúng public key mà bạn gửi (`ssh-ed25519 AAAAC3Nz
 
 ## 5. Chuẩn bị project trên VPS
 
-Workflow sẽ tự tạo thư mục deploy nếu chưa có:
+Workflow sẽ tự tạo thư mục deploy nếu chưa có.
 
-- `/opt/tcb-fraud-detection-mlops`
+Mặc định nếu bạn không cấu hình `DEPLOY_PATH`, repo hiện sẽ deploy vào:
+
+- `$HOME/tcb-fraud-detection-mlops`
+
+Nếu bạn muốn dùng `/opt/tcb-fraud-detection-mlops`, cần tạo sẵn thư mục và cấp quyền cho user deploy:
+
+```bash
+sudo mkdir -p /opt/tcb-fraud-detection-mlops
+sudo chown -R "$USER":"$USER" /opt/tcb-fraud-detection-mlops
+```
 
 Workflow cũng sẽ tự tạo `.env` từ `.env.example` ở lần chạy đầu nếu file `.env` chưa tồn tại. Sau đó bạn vẫn phải SSH vào VPS để cập nhật secret thật trong file `.env`.
 Workflow sẽ dùng `GIT_AUTH_TOKEN` nếu secret này tồn tại; nếu không có, nó sẽ thử clone public repo qua HTTPS không cần auth.

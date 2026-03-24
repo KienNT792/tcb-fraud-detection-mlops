@@ -92,7 +92,7 @@ jobs:
     environment: production
 
     env:
-      DEPLOY_PATH: /opt/tcb-fraud-detection-mlops
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'tcb-fraud-detection-mlops' }}
       DEPLOY_REF: ${{ github.ref_name }}
       IMAGE_TAG: ${{ github.ref_name }}-${{ github.run_number }}
       DEPLOY_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
@@ -136,6 +136,10 @@ jobs:
           envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DEPLOY_REPO_URL,GIT_AUTH_TOKEN
           script: |
             set -euo pipefail
+
+            if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
+              DEPLOY_PATH="$HOME/$DEPLOY_PATH"
+            fi
 
             mkdir -p $DEPLOY_PATH
             cd $DEPLOY_PATH
@@ -191,6 +195,9 @@ jobs:
           envs: DEPLOY_PATH
           script: |
             set -euo pipefail
+            if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
+              DEPLOY_PATH="$HOME/$DEPLOY_PATH"
+            fi
             cd $DEPLOY_PATH
             set -a && . ./.env && set +a
 
