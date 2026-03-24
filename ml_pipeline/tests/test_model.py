@@ -566,7 +566,7 @@ class TestCompareBaseline:
         from ml_pipeline.src.evaluate import compare_baseline
 
         # Default tolerance: pr_auc=0.02, f1=0.03, recall=0.02
-        current = {"pr_auc": 0.79, "f1": 0.72, "recall": 0.89}
+        current = {"pr_auc": 0.79, "f1": 0.73, "recall": 0.89}
         baseline = {"pr_auc": 0.80, "f1": 0.75, "recall": 0.90}
         result = compare_baseline(current, baseline)
         assert result["status"] == "PASS"

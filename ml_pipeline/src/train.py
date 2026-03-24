@@ -396,7 +396,10 @@ def evaluate_model(
         "recall": round(recall, 6),
         "threshold": threshold,
         "confusion_matrix": cm,
-        "best_iteration": int(model.best_iteration),
+        "best_iteration": int(
+            getattr(model, "best_iteration", None)
+            or (model.n_estimators - 1)
+        ),
         "evaluated_at": datetime.now(tz=timezone.utc).isoformat(),
     }
 

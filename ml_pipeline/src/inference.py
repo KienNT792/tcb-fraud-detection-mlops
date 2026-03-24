@@ -229,7 +229,10 @@ class FraudDetector:
             "feature_count": len(self._feature_cols),
             "features":      self._feature_cols,
             "model_type":    type(self._model).__name__,
-            "best_iteration": int(self._model.best_iteration),
+            "best_iteration": int(
+                getattr(self._model, "best_iteration", None)
+                or (self._model.n_estimators - 1)
+            ),
         }
         logger.info(
             "health_check — status=%s | features=%d | threshold=%.4f",
@@ -380,6 +383,11 @@ class FraudDetector:
 
         # --- Customer aggregates: merge train-fitted stats ---
         if "customer_id" in df.columns:
+            # Drop pre-existing columns to prevent _x/_y suffix
+            # collision when merging customer_stats.
+            for col in ("customer_tx_count", "customer_avg_amount"):
+                if col in df.columns:
+                    df = df.drop(columns=[col])
             df = df.merge(
                 customer_stats.reset_index(),
                 on="customer_id",
