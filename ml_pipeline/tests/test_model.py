@@ -1217,3 +1217,169 @@ class TestRiskLevel:
         detector: "FraudDetector",  # noqa: F821
     ) -> None:
         assert detector._risk_level(0.9) == "HIGH"
+
+
+# ===========================================================================
+# Tests — evaluate.py: load_artifacts
+# ===========================================================================
+
+class TestLoadArtifacts:
+    """Tests for load_artifacts."""
+
+    def test_loads_successfully(
+        self,
+        artifact_dir: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import load_artifacts
+
+        model, X_test, y_test, feat_cols, baseline = load_artifacts(
+            str(artifact_dir), str(artifact_dir / "processed"),
+        )
+        assert hasattr(model, "predict_proba")
+        assert isinstance(X_test, pd.DataFrame)
+        assert len(X_test) == len(y_test)
+        assert isinstance(feat_cols, list)
+        assert len(feat_cols) > 0
+        assert isinstance(baseline, dict)
+
+    def test_missing_model_raises(
+        self, tmp_path: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import load_artifacts
+
+        with pytest.raises(FileNotFoundError, match="model"):
+            load_artifacts(str(tmp_path), str(tmp_path))
+
+    def test_missing_features_raises(
+        self,
+        artifact_dir: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import load_artifacts
+
+        # Remove a feature from features.json to cause mismatch
+        feat_path = artifact_dir / "processed" / "features.json"
+        with open(feat_path) as fh:
+            meta = json.load(fh)
+        meta["features"].append("nonexistent_column_xyz")
+        with open(feat_path, "w") as fh:
+            json.dump(meta, fh)
+
+        with pytest.raises(ValueError, match="missing"):
+            load_artifacts(
+                str(artifact_dir),
+                str(artifact_dir / "processed"),
+            )
+
+
+# ===========================================================================
+# Tests — evaluate.py: save_evaluation_report
+# ===========================================================================
+
+class TestSaveEvaluationReport:
+    """Tests for save_evaluation_report."""
+
+    def test_creates_files(self, tmp_path: Path) -> None:
+        from ml_pipeline.src.evaluate import save_evaluation_report
+
+        metrics = {
+            "threshold": 0.35, "precision": 0.6,
+            "recall": 0.5, "f1": 0.55,
+            "pr_auc": 0.60, "roc_auc": 0.85,
+        }
+        comparison = {"status": "PASS", "metrics": {}}
+        seg_df = pd.DataFrame([{
+            "segment": "ALL", "n_samples": 100,
+            "n_fraud": 5, "fraud_rate": 5.0,
+            "precision": 0.8, "recall": 0.6,
+            "f1": 0.69, "pr_auc": 0.7,
+        }])
+
+        save_evaluation_report(
+            metrics, seg_df, comparison,
+            str(tmp_path),
+        )
+        assert (tmp_path / "evaluation.json").exists()
+        assert (tmp_path / "segment_report.csv").exists()
+
+        with open(tmp_path / "evaluation.json") as fh:
+            report = json.load(fh)
+        assert report["overall_status"] == "PASS"
+
+
+# ===========================================================================
+# Tests — evaluate.py: explain_shap
+# ===========================================================================
+
+class TestExplainShap:
+    """Tests for explain_shap."""
+
+    def test_creates_shap_plots(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        tmp_path: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import explain_shap
+
+        explain_shap(
+            trained_model, X_test,
+            X_test.columns.tolist(),
+            output_dir=tmp_path,
+            sample_size=20,
+        )
+        assert (tmp_path / "shap_summary.png").exists()
+        assert (tmp_path / "shap_waterfall.png").exists()
+
+
+# ===========================================================================
+# Tests — inference.py: _transform edge cases
+# ===========================================================================
+
+class TestTransformEdgeCases:
+    """Tests for _transform edge-case paths."""
+
+    def test_timestamp_string_coercion(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        # Convert timestamp to string to trigger coercion
+        sample["timestamp"] = sample["timestamp"].astype(str)
+        transformed = detector._transform(sample)
+        assert "transaction_hour" in transformed.columns
+
+    def test_no_customer_id(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        sample = sample.drop(columns=["customer_id"])
+        transformed = detector._transform(sample)
+        assert "customer_tx_count" in transformed.columns
+        assert (transformed["customer_tx_count"] == 0).all()
+
+    def test_amount_string_coercion(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        sample["amount"] = sample["amount"].astype(str)
+        transformed = detector._transform(sample)
+        assert "amount_log" in transformed.columns
+
+    def test_hour_of_day_rename(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        if "transaction_hour" in sample.columns:
+            sample = sample.rename(
+                columns={"transaction_hour": "hour_of_day"}
+            )
+        transformed = detector._transform(sample)
+        assert "transaction_hour" in transformed.columns
+        assert "hour_of_day" not in transformed.columns
