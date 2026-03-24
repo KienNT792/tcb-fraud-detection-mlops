@@ -10,7 +10,6 @@ Tài liệu này mô tả phần chuẩn bị trên VPS để workflow [`ci-cd-p
 - `SSH_DEPLOY_KEY`: private key dùng cho GitHub Actions SSH vào VPS
 - `DOCKERHUB_TOKEN`: Docker Hub access token dùng để push image trong CI và pull image trên VPS
 
-Workflow hiện tự dùng URL của chính repo đang chạy workflow, nên không còn cần cấu hình `GIT_REPO_URL`.
 Nếu `DEPLOY_PATH` không phải đường dẫn tuyệt đối, workflow sẽ tự resolve thành `$HOME/<DEPLOY_PATH>`.
 Image deploy hiện được hardcode là `tungb12ok/tcb-detect-credit`.
 
@@ -95,7 +94,7 @@ Nếu bạn đang dùng đúng public key mà bạn gửi (`ssh-ed25519 AAAAC3Nz
 
 ## 5. Chuẩn bị project trên VPS
 
-Workflow sẽ tự tạo thư mục deploy nếu chưa có.
+Workflow từ bây giờ không còn tự clone repo trên VPS. Repo phải được clone sẵn tại `DEPLOY_PATH`.
 
 Mặc định nếu bạn không cấu hình `DEPLOY_PATH`, repo hiện sẽ deploy vào:
 
@@ -109,6 +108,15 @@ sudo chown -R "$USER":"$USER" /opt/tcb-fraud-detection-mlops
 ```
 
 Workflow cũng sẽ tự tạo `.env` từ `.env.example` ở lần chạy đầu nếu file `.env` chưa tồn tại. Sau đó bạn vẫn phải SSH vào VPS để cập nhật secret thật trong file `.env`.
+
+Clone repo một lần trên VPS:
+
+```bash
+cd ~
+git clone https://github.com/KienNT792/tcb-fraud-detection-mlops.git
+```
+
+Nếu dùng `DEPLOY_PATH` khác mặc định, clone repo vào đúng thư mục đó trước khi rerun workflow.
 
 Các biến tối thiểu hiện repo đang dùng:
 

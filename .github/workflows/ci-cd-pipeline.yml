@@ -96,7 +96,6 @@ jobs:
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'tcb-fraud-detection-mlops' }}
       DEPLOY_REF: ${{ github.ref_name }}
       IMAGE_TAG: ${{ github.sha }}
-      DEPLOY_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
 
     steps:
       - name: Validate deploy configuration
@@ -140,7 +139,7 @@ jobs:
           # SSH_DEPLOY_KEY must contain the private key content.
           # Install the matching public key in ~/.ssh/authorized_keys on the VPS.
           key: ${{ secrets.SSH_DEPLOY_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DEPLOY_REPO_URL,DOCKERHUB_TOKEN
+          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,DOCKERHUB_TOKEN
           script: |
             set -euo pipefail
 
@@ -167,13 +166,18 @@ jobs:
               exit 1
             fi
 
-            mkdir -p $DEPLOY_PATH
-            cd $DEPLOY_PATH
+            if [ ! -d "$DEPLOY_PATH" ]; then
+              echo "Deploy path does not exist: $DEPLOY_PATH"
+              echo "Clone the repository manually on the VPS first."
+              exit 1
+            fi
+
+            cd "$DEPLOY_PATH"
 
             if [ ! -d .git ]; then
-              git clone "$DEPLOY_REPO_URL" .
-            else
-              git remote set-url origin "$DEPLOY_REPO_URL"
+              echo "No git repository found in $DEPLOY_PATH"
+              echo "Clone the repository manually on the VPS first."
+              exit 1
             fi
 
             git fetch --all --prune

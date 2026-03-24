@@ -44,7 +44,7 @@ Chỉ chạy khi `push` lên branch deploy:
 
 - validate config deploy
 - GitHub Actions SSH vào VPS
-- VPS clone/fetch/pull chính repo này
+- VPS `git pull` trong repo đã clone sẵn
 - VPS `docker login` vào Docker Hub
 - VPS `docker compose pull`
 - tạo `.env` từ `.env.example` nếu chưa có
