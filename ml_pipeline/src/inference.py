@@ -68,11 +68,6 @@ from xgboost import XGBClassifier
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -603,6 +598,9 @@ def _smoke_test(models_dir: str, processed_dir: str) -> None:
 
 
 if __name__ == "__main__":
+    from ml_pipeline.src.logging_config import setup_logging
+    setup_logging()
+
     project_root = Path(__file__).resolve().parent.parent.parent
     _models    = str(project_root / "models")
     _processed = str(project_root / "data" / "processed")

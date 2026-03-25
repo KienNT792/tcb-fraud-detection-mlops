@@ -44,11 +44,6 @@ from .schemas import (
     TransactionRequest,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +53,9 @@ def get_optional_detector():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    from ml_pipeline.src.logging_config import setup_logging
+    setup_logging()
+
     logger.info("=" * 50)
     logger.info("TCB FRAUD DETECTION API — STARTING UP")
     logger.info("=" * 50)

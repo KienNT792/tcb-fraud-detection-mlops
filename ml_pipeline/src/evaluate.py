@@ -16,11 +16,13 @@ import matplotlib
 matplotlib.use("Agg")   # non-interactive backend — safe for server/CI
 import matplotlib.pyplot as plt
 try:
+    from .mlflow_utils import configure_mlflow, build_mlflow_tags
     from .model_registry import (
         find_latest_version_by_run,
         transition_model_version_stage,
     )
 except ImportError:
+    from mlflow_utils import configure_mlflow, build_mlflow_tags
     from model_registry import (
         find_latest_version_by_run,
         transition_model_version_stage,
@@ -38,11 +40,6 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -55,47 +52,6 @@ _REGRESSION_TOLERANCE: dict[str, float] = {
     "f1":        0.03,   # F1 không được giảm quá 3 điểm
     "recall":    0.02,   # Recall không được giảm quá 2 điểm
 }
-DEFAULT_EXPERIMENT_NAME = "fraud-detection-training-pipeline"
-
-
-def configure_mlflow(stage: str) -> str:
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
-    if tracking_uri:
-        mlflow.set_tracking_uri(tracking_uri)
-
-    experiment_name = os.getenv(
-        "MLFLOW_EXPERIMENT_NAME",
-        DEFAULT_EXPERIMENT_NAME,
-    )
-    mlflow.set_experiment(experiment_name)
-
-    run_name = os.getenv("MLFLOW_RUN_NAME")
-    if run_name:
-        return run_name
-
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"{stage}-{timestamp}"
-
-
-def build_mlflow_tags(
-    stage: str,
-    models_dir: str,
-    processed_dir: str,
-    evaluation_dir: str,
-) -> dict[str, str]:
-    tags = {
-        "pipeline.stage": stage,
-        "pipeline.source": os.getenv("PIPELINE_SOURCE", "manual"),
-        "pipeline.run_id": os.getenv("PIPELINE_RUN_ID", ""),
-        "airflow.dag_id": os.getenv("AIRFLOW_PIPELINE_DAG_ID", ""),
-        "airflow.task_id": os.getenv("AIRFLOW_PIPELINE_TASK_ID", ""),
-        "airflow.run_id": os.getenv("AIRFLOW_PIPELINE_RUN_ID", ""),
-        "airflow.logical_date": os.getenv("AIRFLOW_PIPELINE_LOGICAL_DATE", ""),
-        "artifact.models_dir": models_dir,
-        "artifact.processed_dir": processed_dir,
-        "artifact.evaluation_dir": evaluation_dir,
-    }
-    return {key: value for key, value in tags.items() if value}
 
 def load_artifacts(
     models_dir: str,
@@ -517,9 +473,9 @@ def run_evaluation(
         mlflow.set_tags(
             build_mlflow_tags(
                 "evaluation",
-                models_dir,
-                processed_dir,
-                evaluation_dir,
+                models_dir=models_dir,
+                processed_dir=processed_dir,
+                evaluation_dir=evaluation_dir,
             )
         )
         mlflow.log_params(
@@ -636,6 +592,9 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
+    from ml_pipeline.src.logging_config import setup_logging
+    setup_logging()
+
     project_root = Path(__file__).resolve().parent.parent.parent
     _models = os.getenv(
         "MODELS_DIR",
