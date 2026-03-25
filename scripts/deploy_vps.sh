@@ -82,6 +82,13 @@ compose_stack() {
   IMAGE_TAG="$IMAGE_TAG" docker compose "${profile_args[@]}" "$@"
 }
 
+refresh_loadbalancer_runtime() {
+  echo "Recreating loadbalancer to refresh bind-mounted nginx config files."
+  # Git checkouts can replace bind-mounted config files with new inodes. A
+  # targeted recreate ensures nginx sees the current host files after deploy.
+  compose_stack up -d --no-build --no-deps --force-recreate loadbalancer
+}
+
 require_cmd() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -511,6 +518,7 @@ fi
 
 compose_stack up -d --no-build --remove-orphans
 prune_disabled_candidate_service
+refresh_loadbalancer_runtime
 
 HEALTH_CHECKS=(
   "fastapi-stable|http://127.0.0.1:${FASTAPI_STABLE_PORT:-8002}/health|critical|10|10"
