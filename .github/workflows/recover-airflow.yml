@@ -1,6 +1,10 @@
 name: Recover Airflow
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-airflow.yml"
   workflow_dispatch:
     inputs:
       reset_db:
