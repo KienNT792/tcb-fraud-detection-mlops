@@ -9,6 +9,11 @@ __pycache__
 .pytest_cache
 .mypy_cache
 ml_pipeline/mlruns
+bootstrap_runtime_bundle
+data
+mlruns
+models
+modelv2
 volumes
 .env
 README.md

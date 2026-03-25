@@ -28,6 +28,7 @@ from ml_pipeline.src.registry_metadata import (  # noqa: E402
 from ml_pipeline.src.runtime_bundle import (  # noqa: E402
     MODEL_RUNTIME_FILES,
     OPTIONAL_MODEL_RUNTIME_FILES,
+    OPTIONAL_PROCESSED_RUNTIME_FILES,
     PROCESSED_RUNTIME_FILES,
     RUNTIME_BUNDLE_ARTIFACT_PATH,
     log_runtime_bundle,
@@ -483,6 +484,11 @@ def reset_output_dirs(
         if candidate.exists():
             candidate.unlink()
 
+    for filename in OPTIONAL_PROCESSED_RUNTIME_FILES:
+        candidate = processed_dir / filename
+        if candidate.exists():
+            candidate.unlink()
+
 
 def resolve_output_dirs(
     *,
@@ -548,6 +554,11 @@ def download_registered_version_bundle(
 
     for filename in PROCESSED_RUNTIME_FILES:
         copy_file(processed_src / filename, processed_dst / filename)
+
+    for filename in OPTIONAL_PROCESSED_RUNTIME_FILES:
+        candidate = processed_src / filename
+        if candidate.exists():
+            copy_file(candidate, processed_dst / filename)
 
     metadata = {
         "model_name": model_name,

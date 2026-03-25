@@ -35,6 +35,7 @@ jobs:
       DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER || secrets.DEPLOY_USER }}
       DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY || secrets.DEPLOY_SSH_KEY }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'tcb-fraud-detection-mlops' }}
+      DEPLOY_REF: ${{ github.ref_name }}
     steps:
       - name: Validate remote rollout configuration
         run: |
@@ -61,18 +62,38 @@ jobs:
           host: ${{ env.DEPLOY_HOST }}
           username: ${{ env.DEPLOY_USER }}
           key: ${{ env.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_PATH,DEPLOY_REF
           script: |
-            set -e
+            set -euo pipefail
 
             if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
               DEPLOY_PATH="$HOME/$DEPLOY_PATH"
             fi
 
             cd "${DEPLOY_PATH}"
+            git fetch --all --prune
+            git checkout "${DEPLOY_REF}"
+            git pull --ff-only origin "${DEPLOY_REF}"
+            ROLLOUT_IMAGE="tcb-rolloutctl:$(git rev-parse --short HEAD)"
+
+            docker build \
+              --file monitoring/simulator/Dockerfile.rollout \
+              --tag "${ROLLOUT_IMAGE}" \
+              .
+
             if [ "${{ inputs.action }}" = "set-canary" ]; then
-              python -m monitoring.simulator.rollout_ctl set-canary --percent "${{ inputs.percent }}"
+              set -- set-canary --percent "${{ inputs.percent }}"
             elif [ "${{ inputs.action }}" = "promote" ]; then
-              python -m monitoring.simulator.rollout_ctl promote
+              set -- promote
             else
-              python -m monitoring.simulator.rollout_ctl rollback --registry-action "${{ inputs.registry_action }}"
+              set -- rollback --registry-action "${{ inputs.registry_action }}"
             fi
+
+            docker run --rm \
+              --network host \
+              --user "$(id -u):$(id -g)" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "${DEPLOY_PATH}:/workspace" \
+              -w /workspace \
+              "${ROLLOUT_IMAGE}" \
+              "$@"

@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import mlflow
+import pandas as pd
 
 RUNTIME_BUNDLE_ARTIFACT_PATH = "runtime_bundle"
+DRIFT_REFERENCE_FILENAME = "drift_reference.parquet"
+DEFAULT_DRIFT_REFERENCE_SAMPLE_SIZE = 2000
 
 MODEL_RUNTIME_FILES: tuple[str, ...] = (
     "xgb_fraud_model.joblib",
@@ -28,6 +31,41 @@ PROCESSED_RUNTIME_FILES: tuple[str, ...] = (
     "categorical_maps.json",
 )
 
+OPTIONAL_PROCESSED_RUNTIME_FILES: tuple[str, ...] = (
+    DRIFT_REFERENCE_FILENAME,
+)
+
+
+def ensure_optional_processed_runtime_artifacts(
+    processed_dir: str | Path,
+    *,
+    drift_reference_sample_size: int = DEFAULT_DRIFT_REFERENCE_SAMPLE_SIZE,
+) -> dict[str, Path]:
+    processed_path = Path(processed_dir)
+    available: dict[str, Path] = {}
+    drift_reference_path = processed_path / DRIFT_REFERENCE_FILENAME
+    if drift_reference_path.exists():
+        available[DRIFT_REFERENCE_FILENAME] = drift_reference_path
+        return available
+
+    train_path = processed_path / "train.parquet"
+    if not train_path.exists():
+        return available
+
+    reference_df = pd.read_parquet(train_path)
+    if reference_df.empty:
+        return available
+
+    if len(reference_df) > drift_reference_sample_size:
+        reference_df = reference_df.sample(
+            n=drift_reference_sample_size,
+            random_state=42,
+        ).reset_index(drop=True)
+
+    reference_df.to_parquet(drift_reference_path, index=False)
+    available[DRIFT_REFERENCE_FILENAME] = drift_reference_path
+    return available
+
 
 def build_runtime_bundle_metadata(
     models_dir: str,
@@ -45,6 +83,7 @@ def build_runtime_bundle_metadata(
             str(Path(parent) / filename)
             for parent, filename in OPTIONAL_MODEL_RUNTIME_FILES
         ],
+        "optional_processed_files": list(OPTIONAL_PROCESSED_RUNTIME_FILES),
     }
     if extra:
         payload.update(extra)
@@ -60,6 +99,9 @@ def log_runtime_bundle(
 ) -> None:
     models_path = Path(models_dir)
     processed_path = Path(processed_dir)
+    optional_processed_files = ensure_optional_processed_runtime_artifacts(
+        processed_path,
+    )
 
     for filename in MODEL_RUNTIME_FILES:
         mlflow.log_artifact(
@@ -78,6 +120,15 @@ def log_runtime_bundle(
     for filename in PROCESSED_RUNTIME_FILES:
         mlflow.log_artifact(
             str(processed_path / filename),
+            artifact_path=f"{artifact_path}/processed",
+        )
+
+    for filename in OPTIONAL_PROCESSED_RUNTIME_FILES:
+        candidate = optional_processed_files.get(filename)
+        if candidate is None or not candidate.exists():
+            continue
+        mlflow.log_artifact(
+            str(candidate),
             artifact_path=f"{artifact_path}/processed",
         )
 

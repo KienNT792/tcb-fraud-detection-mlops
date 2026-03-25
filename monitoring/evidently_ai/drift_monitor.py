@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+_REFERENCE_ARTIFACT_FILENAMES = (
+    "drift_reference.parquet",
+    "train.parquet",
+)
 
 
 @dataclass(slots=True)
@@ -77,11 +81,13 @@ class DriftMonitor:
                 return self._snapshot
 
             feature_cols = self._extract_feature_cols(detector)
-            train_path = self._processed_dir / "train.parquet"
+            for filename in _REFERENCE_ARTIFACT_FILENAMES:
+                reference_path = self._processed_dir / filename
+                if not reference_path.exists():
+                    continue
 
-            if train_path.exists():
                 try:
-                    reference_df = pd.read_parquet(train_path)
+                    reference_df = pd.read_parquet(reference_path)
                     reference_df = self._select_feature_frame(
                         reference_df,
                         feature_cols=feature_cols,
@@ -90,11 +96,15 @@ class DriftMonitor:
                         self._reference_df = self._sample_reference(reference_df)
                         self._feature_cols = self._reference_df.columns.tolist()
                         self._snapshot = self._build_snapshot(
-                            reason="reference_loaded_from_train_parquet"
+                            reason=f"reference_loaded_from_{filename}"
                         )
                         return self._snapshot
                 except Exception as exc:  # pragma: no cover - defensive runtime guard
-                    logger.warning("Failed to load train.parquet for drift monitoring: %s", exc)
+                    logger.warning(
+                        "Failed to load %s for drift monitoring: %s",
+                        filename,
+                        exc,
+                    )
 
             self._snapshot = self._build_snapshot(reason="waiting_for_warmup_window")
             return self._snapshot
@@ -267,8 +277,10 @@ class DriftMonitor:
         if self._reference_df is None:
             return "missing"
 
-        train_path = self._processed_dir / "train.parquet"
-        if train_path.exists():
+        if any(
+            (self._processed_dir / filename).exists()
+            for filename in _REFERENCE_ARTIFACT_FILENAMES
+        ):
             return "train_parquet"
         return "warmup_window"
 
