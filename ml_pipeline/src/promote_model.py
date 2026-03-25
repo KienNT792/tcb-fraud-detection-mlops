@@ -8,11 +8,6 @@ from ml_pipeline.src.model_registry import (
     transition_model_version_stage,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -83,4 +78,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from ml_pipeline.src.logging_config import setup_logging
+    setup_logging()
+
     main()
+

@@ -949,27 +949,27 @@ class TestFraudDetectorTransform:
 class TestConfigureMlflow:
     """Tests for configure_mlflow."""
 
-    @patch("ml_pipeline.src.evaluate.mlflow")
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
     def test_defaults(self, mock_mlflow: MagicMock) -> None:
-        from ml_pipeline.src.evaluate import configure_mlflow
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
 
         with patch.dict(os.environ, {}, clear=True):
             name = configure_mlflow("train")
         mock_mlflow.set_experiment.assert_called_once()
         assert name.startswith("train-")
 
-    @patch("ml_pipeline.src.evaluate.mlflow")
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
     def test_custom_run_name(self, mock_mlflow: MagicMock) -> None:
-        from ml_pipeline.src.evaluate import configure_mlflow
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
 
         env = {"MLFLOW_RUN_NAME": "my-custom-run"}
         with patch.dict(os.environ, env, clear=True):
             name = configure_mlflow("eval")
         assert name == "my-custom-run"
 
-    @patch("ml_pipeline.src.evaluate.mlflow")
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
     def test_tracking_uri_set(self, mock_mlflow: MagicMock) -> None:
-        from ml_pipeline.src.evaluate import configure_mlflow
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
 
         env = {"MLFLOW_TRACKING_URI": "http://localhost:5000"}
         with patch.dict(os.environ, env, clear=True):
@@ -986,11 +986,14 @@ class TestBuildMlflowTags:
     """Tests for build_mlflow_tags."""
 
     def test_filters_empty_values(self) -> None:
-        from ml_pipeline.src.evaluate import build_mlflow_tags
+        from ml_pipeline.src.mlflow_utils import build_mlflow_tags
 
         with patch.dict(os.environ, {}, clear=True):
             tags = build_mlflow_tags(
-                "eval", "/m", "/p", "/e",
+                "eval",
+                models_dir="/m",
+                processed_dir="/p",
+                evaluation_dir="/e",
             )
         # Empty env vars should be filtered out
         assert "pipeline.stage" in tags
@@ -998,12 +1001,15 @@ class TestBuildMlflowTags:
         assert all(v for v in tags.values())
 
     def test_includes_manual_source(self) -> None:
-        from ml_pipeline.src.evaluate import build_mlflow_tags
+        from ml_pipeline.src.mlflow_utils import build_mlflow_tags
 
         env = {"PIPELINE_SOURCE": "airflow"}
         with patch.dict(os.environ, env, clear=True):
             tags = build_mlflow_tags(
-                "train", "/models", "/proc", "/eval",
+                "train",
+                models_dir="/models",
+                processed_dir="/proc",
+                evaluation_dir="/eval",
             )
         assert tags["pipeline.source"] == "airflow"
 
@@ -1450,13 +1456,13 @@ class TestTransformEdgeCases:
 # ===========================================================================
 
 class TestTrainConfigureMlflow:
-    """Tests for train.configure_mlflow."""
+    """Tests for train.configure_mlflow (imported from mlflow_utils)."""
 
-    @patch("ml_pipeline.src.train.mlflow")
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
     def test_tracking_uri(
         self, mock_mlflow: MagicMock,
     ) -> None:
-        from ml_pipeline.src.train import configure_mlflow
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
 
         env = {"MLFLOW_TRACKING_URI": "http://mlflow:5000"}
         with patch.dict(os.environ, env, clear=True):
@@ -1465,11 +1471,11 @@ class TestTrainConfigureMlflow:
             "http://mlflow:5000"
         )
 
-    @patch("ml_pipeline.src.train.mlflow")
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
     def test_custom_run_name(
         self, mock_mlflow: MagicMock,
     ) -> None:
-        from ml_pipeline.src.train import configure_mlflow
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
 
         env = {"MLFLOW_RUN_NAME": "custom-run"}
         with patch.dict(os.environ, env, clear=True):

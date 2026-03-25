@@ -62,6 +62,7 @@ jobs:
         run: |
           pytest ml_pipeline/tests/test_preprocess.py \
                  ml_pipeline/tests/test_model.py \
+                 ml_pipeline/tests/test_coverage.py \
                  serving_api/tests \
             --cov=ml_pipeline.src \
             --cov=serving_api.app \
