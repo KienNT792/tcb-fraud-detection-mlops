@@ -1,4 +1,5 @@
 name: Recover Airflow
+# Keeps a push-triggered emergency recovery path available for server-side fixes.
 
 on:
   push:

@@ -155,8 +155,8 @@ services:
       fi &&
       /opt/airflow/venv/bin/python -m pip install --no-cache-dir -r /opt/airflow/project/ml_pipeline/requirements-airflow.txt &&
       export PATH=/opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin:$$PATH &&
-      export PYTHONPATH=/home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project:$$PYTHONPATH &&
-      exec /home/airflow/.local/bin/airflow standalone
+      export PYTHONPATH=/opt/airflow/venv/lib/python3.10/site-packages:/home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project:$$PYTHONPATH &&
+      exec /opt/airflow/venv/bin/python -m airflow standalone
       "
     env_file:
       - .env
@@ -174,7 +174,7 @@ services:
       _AIRFLOW_WWW_USER_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-admin123}"
       AIRFLOW_VENV_PYTHON: /opt/airflow/venv/bin/python
       PATH: /opt/airflow/venv/bin:/home/airflow/.local/bin:/usr/local/bin:/usr/bin:/bin
-      PYTHONPATH: /home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project
+      PYTHONPATH: /opt/airflow/venv/lib/python3.10/site-packages:/home/airflow/.local/lib/python3.10/site-packages:/opt/airflow/project
       PROJECT_ROOT: /opt/airflow/project
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_EXPERIMENT_NAME: fraud-detection-training-pipeline
