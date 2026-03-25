@@ -74,6 +74,11 @@ jobs:
             echo "Airflow volume usage:"
             du -sh volumes/airflow/* 2>/dev/null | sort -h || true
 
+            echo "Current Airflow container state before recovery:"
+            docker compose ps airflow || true
+            echo "Recent Airflow logs before recovery:"
+            docker compose logs --tail=250 airflow || true
+
             docker compose stop airflow || true
             docker compose rm -f airflow || true
 
