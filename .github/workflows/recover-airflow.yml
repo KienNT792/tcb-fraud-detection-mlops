@@ -78,10 +78,17 @@ jobs:
 
             if [ "${RESET_DB}" = "true" ]; then
               ts="$(date +%F-%H%M%S)"
-              if [ -f volumes/airflow/airflow.db ]; then
-                mv volumes/airflow/airflow.db "volumes/airflow/airflow.db.bak.${ts}"
-              fi
-              rm -f volumes/airflow/airflow.db-wal volumes/airflow/airflow.db-shm
+              docker run --rm \
+                -u root \
+                -v "${DEPLOY_PATH}/volumes/airflow:/airflow" \
+                alpine:3.20 \
+                sh -c "
+                  if [ -f /airflow/airflow.db ]; then
+                    mv /airflow/airflow.db /airflow/airflow.db.bak.${ts};
+                  fi
+                  rm -f /airflow/airflow.db-wal /airflow/airflow.db-shm /airflow/airflow-webserver.pid;
+                  chown -R 50000:0 /airflow
+                "
             fi
 
             docker compose up -d --force-recreate airflow
