@@ -39,6 +39,7 @@ try:
         register_model_from_run,
         transition_model_version_stage,
     )
+    from .registry_metadata import write_registry_metadata
     from .runtime_bundle import (
         RUNTIME_BUNDLE_ARTIFACT_PATH,
         log_runtime_bundle,
@@ -49,6 +50,7 @@ except ImportError:
         register_model_from_run,
         transition_model_version_stage,
     )
+    from registry_metadata import write_registry_metadata
     from runtime_bundle import (
         RUNTIME_BUNDLE_ARTIFACT_PATH,
         log_runtime_bundle,
@@ -636,6 +638,19 @@ def run_training(
             mlflow.set_tag("registry.model_name", model_name)
             mlflow.set_tag("registry.version", str(version))
             mlflow.set_tag("registry.stage", stage)
+            write_registry_metadata(
+                models_dir,
+                {
+                    "model_name": model_name,
+                    "version": int(version),
+                    "stage": stage,
+                    "run_id": run_id,
+                    "runtime_bundle_artifact_path": (
+                        RUNTIME_BUNDLE_ARTIFACT_PATH
+                    ),
+                    "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+                },
+            )
             logger.info(
                 "MLflow model registry updated"
                 " | model=%s | version=%s"

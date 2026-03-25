@@ -45,7 +45,7 @@ services:
       - candidate
     environment:
       MODELS_DIR: /app/models/deployments/candidate
-      PROCESSED_DIR: /app/data/processed
+      PROCESSED_DIR: /app/models/deployments/candidate/processed
       MODEL_SLOT: candidate
       ALLOW_EMPTY_MODEL: "true"
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -211,10 +211,57 @@ services:
       - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ./volumes/prometheus:/prometheus
     depends_on:
+      - alertmanager
       - fastapi-stable
       - nginx-exporter
       - node-exporter
       - cadvisor
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager
+    container_name: tcb-alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./volumes/alertmanager:/alertmanager
+    networks:
+      - mlops
+    restart: unless-stopped
+
+  rollback-automation:
+    image: python:3.10-slim
+    container_name: tcb-rollback-automation
+    command:
+      - python
+      - /app/monitoring/automation/alertmanager_rollback_receiver.py
+    env_file:
+      - .env
+    environment:
+      AUTO_ROLLBACK_PORT: 8085
+      AUTO_ROLLBACK_GITHUB_WORKFLOW: ${AUTO_ROLLBACK_GITHUB_WORKFLOW:-rollback-canary.yml}
+      AUTO_ROLLBACK_GITHUB_REF: ${AUTO_ROLLBACK_GITHUB_REF:-main}
+      AUTO_ROLLBACK_ALERT_NAMES: ${AUTO_ROLLBACK_ALERT_NAMES:-CandidateModelBehaviorRegression}
+      AUTO_ROLLBACK_COOLDOWN_SECONDS: ${AUTO_ROLLBACK_COOLDOWN_SECONDS:-900}
+      AUTO_ROLLBACK_REGISTRY_ACTION: ${AUTO_ROLLBACK_REGISTRY_ACTION:-none}
+      AUTO_ROLLBACK_STATE_FILE: /state/auto_rollback_state.json
+    volumes:
+      - .:/app:ro
+      - ./volumes/rollback-automation:/state
+    depends_on:
+      - alertmanager
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/health')
     networks:
       - mlops
     restart: unless-stopped

@@ -16,6 +16,15 @@ on:
         description: Candidate traffic percent (for set-canary)
         required: false
         default: "10"
+      registry_action:
+        description: Optional registry action for rollback
+        required: false
+        default: none
+        type: choice
+        options:
+          - none
+          - archive-current-production
+          - restore-previous-production
 
 jobs:
   rollout-control:
@@ -35,5 +44,5 @@ jobs:
             elif [ "${{ inputs.action }}" = "promote" ]; then
               python -m monitoring.simulator.rollout_ctl promote
             else
-              python -m monitoring.simulator.rollout_ctl rollback
+              python -m monitoring.simulator.rollout_ctl rollback --registry-action "${{ inputs.registry_action }}"
             fi

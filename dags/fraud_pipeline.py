@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import time
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from airflow import DAG
+from mlflow import MlflowClient
 from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import (
     BranchPythonOperator,
     PythonOperator,
+)
+from ml_pipeline.src.registry_metadata import read_registry_metadata
+from scripts.runtime_bundle_registry import (
+    download_registered_version_bundle,
+    publish_run,
+    resolve_model_version,
 )
 
 
@@ -39,6 +45,8 @@ DEFAULT_RETRAIN_METRIC = os.getenv("MODEL_QUALITY_METRIC", "eval_f1")
 # Canary deployment paths (shared volume with FastAPI containers)
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 CANDIDATE_DIR = os.path.join(MODELS_DIR, "deployments", "candidate")
+PROCESSED_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
+CANDIDATE_PROCESSED_DIR = os.path.join(CANDIDATE_DIR, "processed")
 EVALUATION_DIR = os.path.join(MODELS_DIR, "evaluation")
 
 # FastAPI candidate container URL (accessible via Docker network)
@@ -49,15 +57,7 @@ CANDIDATE_URL = os.getenv(
 
 # Model artifact filenames
 _MODEL_FILENAME = "xgb_fraud_model.joblib"
-_METRICS_FILENAME = "metrics.json"
-_FEATURE_IMPORTANCE_FILENAME = "feature_importance.csv"
-_MANIFEST_FILENAME = "model_manifest.json"
 _EVALUATION_DIRNAME = "evaluation"
-_ROOT_ARTIFACTS = (
-    _MODEL_FILENAME,
-    _METRICS_FILENAME,
-    _FEATURE_IMPORTANCE_FILENAME,
-)
 
 
 def _parse_threshold(raw_value: str) -> float:
@@ -156,21 +156,17 @@ def should_trigger_retraining() -> str:
 
 
 def stage_candidate_after_eval(**context: Any) -> dict[str, Any]:
-    """Copy model artifacts to candidate dir and write manifest.
-
-    This task runs after evaluate completes. It:
-    1. Reads evaluation.json to verify the model passed quality checks.
-    2. Copies model artifacts from models/ to models/deployments/candidate/.
-    3. Writes a model_manifest.json so the candidate FastAPI container
-       auto-reloads the new model via manifest-based hot-reload.
+    """Publish the evaluated runtime bundle and sync it into candidate slot.
 
     Raises:
         RuntimeError: If evaluation status is FAIL.
-        FileNotFoundError: If required model artifacts are missing.
+        FileNotFoundError:
+            If required artifacts or registry metadata are missing.
     """
     models_path = Path(MODELS_DIR)
     candidate_path = Path(CANDIDATE_DIR)
     eval_path = models_path / _EVALUATION_DIRNAME / "evaluation.json"
+    status = "UNKNOWN"
 
     # Step 1 — Check evaluation status
     if eval_path.exists():
@@ -197,69 +193,67 @@ def stage_candidate_after_eval(**context: Any) -> dict[str, Any]:
             "train.py must run before stage_candidate."
         )
 
-    # Step 3 — Copy artifacts to candidate directory
-    candidate_path.mkdir(parents=True, exist_ok=True)
-
-    # Clean old candidate artifacts
-    for filename in (*_ROOT_ARTIFACTS, _MANIFEST_FILENAME):
-        old_artifact = candidate_path / filename
-        if old_artifact.exists():
-            old_artifact.unlink()
-    old_eval_dir = candidate_path / _EVALUATION_DIRNAME
-    if old_eval_dir.exists():
-        shutil.rmtree(old_eval_dir)
-
-    # Copy root artifacts
-    for filename in _ROOT_ARTIFACTS:
-        src = models_path / filename
-        if src.exists():
-            shutil.copy2(src, candidate_path / filename)
-            print(f"Copied {filename} → {candidate_path / filename}")
-
-    # Copy evaluation directory
-    eval_src = models_path / _EVALUATION_DIRNAME
-    if eval_src.exists():
-        shutil.copytree(
-            eval_src,
-            candidate_path / _EVALUATION_DIRNAME,
-            dirs_exist_ok=True,
+    registry_metadata = read_registry_metadata(models_path)
+    if not registry_metadata:
+        raise FileNotFoundError(
+            "Missing registry metadata in models/. "
+            "train.py must register the model before candidate staging."
         )
-        print(f"Copied {_EVALUATION_DIRNAME}/ → candidate")
 
-    # Step 4 — Write model_manifest.json (triggers auto-reload)
     dag_run = context.get("dag_run")
     run_id = dag_run.run_id if dag_run else "manual"
-    ts = datetime.now(tz=timezone.utc)
-    model_id = f"airflow-{ts.strftime('%Y%m%d%H%M%S')}"
+    registry_model_name = str(registry_metadata["model_name"])
+    registry_version = int(registry_metadata["version"])
+    runtime_bundle_path = str(
+        registry_metadata.get("runtime_bundle_artifact_path", "runtime_bundle")
+    )
 
-    # Collect metrics summary
-    metrics_summary: dict[str, Any] = {}
-    metrics_path = candidate_path / _METRICS_FILENAME
-    if metrics_path.exists():
-        with open(metrics_path, encoding="utf-8") as fh:
-            metrics_summary["metrics"] = json.load(fh)
-    eval_candidate = candidate_path / _EVALUATION_DIRNAME / "evaluation.json"
-    if eval_candidate.exists():
-        with open(eval_candidate, encoding="utf-8") as fh:
-            metrics_summary["evaluation"] = json.load(fh)
+    publish_run(
+        run_id=str(registry_metadata["run_id"]),
+        models_dir=str(models_path),
+        processed_dir=PROCESSED_DIR,
+        extra_metadata={
+            "published_by": "airflow.stage_candidate",
+            "evaluation_status": status,
+            "airflow_run_id": run_id,
+        },
+    )
 
-    manifest = {
-        "slot": "candidate",
+    client = MlflowClient()
+    version = resolve_model_version(
+        client=client,
+        model_name=registry_model_name,
+        version=registry_version,
+    )
+    result = download_registered_version_bundle(
+        model_name=registry_model_name,
+        version=version,
+        artifact_path=runtime_bundle_path,
+        output_root=PROJECT_ROOT,
+        models_output_dir=str(candidate_path),
+        processed_output_dir=CANDIDATE_PROCESSED_DIR,
+        manifest_slot="candidate",
+        registry_stage=str(registry_metadata.get("stage", "Staging")),
+    )
+
+    manifest_path = candidate_path / "model_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["staged_by"] = "airflow"
+    manifest["airflow_run_id"] = run_id
+    manifest["source_model_dir"] = str(models_path.resolve())
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    model_id = str(result["model_id"])
+    print(
+        "Candidate model staged from MLflow Registry: "
+        f"model_id={model_id} | version={registry_version}"
+    )
+    return {
         "model_id": model_id,
-        "source_model_dir": str(models_path.resolve()),
-        "updated_at": datetime.now(tz=timezone.utc).isoformat(),
-        "metrics_summary": metrics_summary,
-        "staged_by": "airflow",
-        "airflow_run_id": run_id,
+        "registry_model_name": registry_model_name,
+        "registry_version": registry_version,
+        "run_id": str(registry_metadata["run_id"]),
     }
-    manifest_path = candidate_path / _MANIFEST_FILENAME
-    with open(manifest_path, "w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2)
-    print(f"Manifest written → {manifest_path}")
-    print(f"Candidate model staged: model_id={model_id}")
-
-    # Push model_id to XCom for verify_candidate
-    return {"model_id": model_id}
 
 
 def verify_candidate_health(**context: Any) -> None:

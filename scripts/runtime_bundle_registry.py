@@ -22,6 +22,9 @@ from ml_pipeline.src.model_registry import (  # noqa: E402
     register_model_from_run,
     transition_model_version_stage,
 )
+from ml_pipeline.src.registry_metadata import (  # noqa: E402
+    write_registry_metadata,
+)
 from ml_pipeline.src.runtime_bundle import (  # noqa: E402
     MODEL_RUNTIME_FILES,
     OPTIONAL_MODEL_RUNTIME_FILES,
@@ -59,7 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap_parser = subparsers.add_parser(
         "bootstrap-run",
-        help="Register a run into MLflow Registry, transition stage, and attach a runtime bundle.",
+        help=(
+            "Register a run into MLflow Registry, transition stage, "
+            "and attach a runtime bundle."
+        ),
     )
     bootstrap_parser.add_argument("--run-id", required=True)
     bootstrap_parser.add_argument(
@@ -81,7 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap_artifacts_parser = subparsers.add_parser(
         "bootstrap-artifacts",
-        help="Create the first MLflow run/model version from repository bootstrap artifacts.",
+        help=(
+            "Create the first MLflow run/model version from repository "
+            "bootstrap artifacts."
+        ),
     )
     bootstrap_artifacts_parser.add_argument(
         "--model-name",
@@ -113,7 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish_stage_parser = subparsers.add_parser(
         "publish-stage",
-        help="Attach runtime bundle artifacts to the latest model version in a registry stage.",
+        help=(
+            "Attach runtime bundle artifacts to the latest model version "
+            "in a registry stage."
+        ),
     )
     publish_stage_parser.add_argument(
         "--model-name",
@@ -134,7 +146,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     download_parser = subparsers.add_parser(
         "download-stage",
-        help="Download runtime bundle from the latest model version in a registry stage.",
+        help=(
+            "Download runtime bundle from the latest model version in a "
+            "registry stage."
+        ),
     )
     download_parser.add_argument(
         "--model-name",
@@ -152,6 +167,58 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     download_parser.add_argument(
+        "--models-output-dir",
+        default="",
+    )
+    download_parser.add_argument(
+        "--processed-output-dir",
+        default="",
+    )
+    download_parser.add_argument(
+        "--manifest-slot",
+        default="stable",
+    )
+    download_parser.add_argument(
+        "--output-root",
+        default=str(REPO_ROOT),
+    )
+
+    download_version_parser = subparsers.add_parser(
+        "download-version",
+        help=(
+            "Download runtime bundle from a specific registered "
+            "model version."
+        ),
+    )
+    download_version_parser.add_argument(
+        "--model-name",
+        default=os.getenv("MLFLOW_REGISTERED_MODEL_NAME", "tcb-fraud-xgboost"),
+    )
+    download_version_parser.add_argument(
+        "--version",
+        required=True,
+        type=int,
+    )
+    download_version_parser.add_argument(
+        "--artifact-path",
+        default=os.getenv(
+            "MLFLOW_RUNTIME_BUNDLE_PATH",
+            RUNTIME_BUNDLE_ARTIFACT_PATH,
+        ),
+    )
+    download_version_parser.add_argument(
+        "--models-output-dir",
+        default="",
+    )
+    download_version_parser.add_argument(
+        "--processed-output-dir",
+        default="",
+    )
+    download_version_parser.add_argument(
+        "--manifest-slot",
+        default="stable",
+    )
+    download_version_parser.add_argument(
         "--output-root",
         default=str(REPO_ROOT),
     )
@@ -185,15 +252,20 @@ def publish_run(
     run_id: str,
     models_dir: str,
     processed_dir: str,
+    extra_metadata: dict[str, str] | None = None,
 ) -> None:
+    metadata = {
+        "published_at": datetime.now(tz=timezone.utc).isoformat(),
+        "published_by": "runtime_bundle_registry.py",
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
     with mlflow.start_run(run_id=run_id):
         log_runtime_bundle(
             models_dir=models_dir,
             processed_dir=processed_dir,
-            extra_metadata={
-                "published_at": datetime.now(tz=timezone.utc).isoformat(),
-                "published_by": "runtime_bundle_registry.py",
-            },
+            extra_metadata=metadata,
         )
         mlflow.set_tag("runtime_bundle.ready", "true")
         mlflow.set_tag(
@@ -233,7 +305,8 @@ def bootstrap_artifacts(
     model_artifact_path = Path(model_artifact_dir)
     if not (model_artifact_path / "MLmodel").exists():
         raise FileNotFoundError(
-            f"Missing MLflow model definition at {model_artifact_path / 'MLmodel'}"
+            "Missing MLflow model definition at "
+            f"{model_artifact_path / 'MLmodel'}"
         )
 
     models_path = Path(models_dir)
@@ -246,7 +319,8 @@ def bootstrap_artifacts(
     for filename in PROCESSED_RUNTIME_FILES:
         if not (processed_path / filename).exists():
             raise FileNotFoundError(
-                f"Missing required processed artifact: {processed_path / filename}"
+                "Missing required processed artifact: "
+                f"{processed_path / filename}"
             )
 
     mlflow.set_experiment(experiment_name)
@@ -258,7 +332,9 @@ def bootstrap_artifacts(
                 "pipeline.stage": "bootstrap",
                 "bootstrap.model_name": model_name,
                 "bootstrap.target_stage": stage,
-                "bootstrap.model_artifact_dir": str(model_artifact_path.resolve()),
+                "bootstrap.model_artifact_dir": str(
+                    model_artifact_path.resolve()
+                ),
                 "artifact.models_dir": str(models_path.resolve()),
                 "artifact.processed_dir": str(processed_path.resolve()),
             }
@@ -362,24 +438,83 @@ def resolve_latest_model_version(
     return versions[0]
 
 
+def resolve_model_version(
+    *,
+    client: MlflowClient,
+    model_name: str,
+    version: int,
+):
+    return client.get_model_version(model_name, str(version))
+
+
 def copy_file(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
 
 
-def download_stage_bundle(
+def reset_output_dirs(
+    *,
+    models_dir: Path,
+    processed_dir: Path,
+) -> None:
+    models_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
+
+    for filename in (
+        *MODEL_RUNTIME_FILES,
+        "model_manifest.json",
+        "registry_metadata.json",
+    ):
+        candidate = models_dir / filename
+        if candidate.exists():
+            candidate.unlink()
+
+    for parent, filename in OPTIONAL_MODEL_RUNTIME_FILES:
+        candidate = models_dir / parent / filename
+        if candidate.exists():
+            candidate.unlink()
+
+    evaluation_dir = models_dir / "evaluation"
+    if evaluation_dir.exists() and not any(evaluation_dir.iterdir()):
+        evaluation_dir.rmdir()
+
+    for filename in PROCESSED_RUNTIME_FILES:
+        candidate = processed_dir / filename
+        if candidate.exists():
+            candidate.unlink()
+
+
+def resolve_output_dirs(
+    *,
+    output_root: str,
+    models_output_dir: str = "",
+    processed_output_dir: str = "",
+) -> tuple[Path, Path]:
+    output_root_path = Path(output_root)
+    resolved_models_dir = (
+        Path(models_output_dir)
+        if models_output_dir
+        else output_root_path / "models"
+    )
+    resolved_processed_dir = (
+        Path(processed_output_dir)
+        if processed_output_dir
+        else output_root_path / "data" / "processed"
+    )
+    return resolved_models_dir, resolved_processed_dir
+
+
+def download_registered_version_bundle(
     *,
     model_name: str,
-    stage: str,
+    version,
     artifact_path: str,
     output_root: str,
-) -> None:
-    client = MlflowClient()
-    version = resolve_latest_model_version(
-        client=client,
-        model_name=model_name,
-        stage=stage,
-    )
+    models_output_dir: str = "",
+    processed_output_dir: str = "",
+    manifest_slot: str = "stable",
+    registry_stage: str | None = None,
+) -> dict[str, str]:
     run_id = version.run_id
     download_parent = Path(output_root) / ".runtime_bundle"
     download_parent.mkdir(parents=True, exist_ok=True)
@@ -393,8 +528,15 @@ def download_stage_bundle(
     )
     models_src = bundle_dir / "models"
     processed_src = bundle_dir / "processed"
-    models_dst = Path(output_root) / "models"
-    processed_dst = Path(output_root) / "data" / "processed"
+    models_dst, processed_dst = resolve_output_dirs(
+        output_root=output_root,
+        models_output_dir=models_output_dir,
+        processed_output_dir=processed_output_dir,
+    )
+    reset_output_dirs(
+        models_dir=models_dst,
+        processed_dir=processed_dst,
+    )
 
     for filename in MODEL_RUNTIME_FILES:
         copy_file(models_src / filename, models_dst / filename)
@@ -407,12 +549,28 @@ def download_stage_bundle(
     for filename in PROCESSED_RUNTIME_FILES:
         copy_file(processed_src / filename, processed_dst / filename)
 
+    metadata = {
+        "model_name": model_name,
+        "version": int(version.version),
+        "stage": (
+            registry_stage
+            or getattr(version, "current_stage", None)
+            or ""
+        ),
+        "run_id": run_id,
+        "runtime_bundle_artifact_path": artifact_path,
+        "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    write_registry_metadata(models_dst, metadata)
+
     manifest = {
-        "slot": "stable",
+        "slot": manifest_slot,
         "model_id": f"{model_name}-v{version.version}",
+        "source_model_dir": str(models_dst.resolve()),
+        "processed_dir": str(processed_dst.resolve()),
         "updated_at": datetime.now(tz=timezone.utc).isoformat(),
         "registry_model_name": model_name,
-        "registry_stage": stage,
+        "registry_stage": metadata["stage"],
         "registry_version": str(version.version),
         "run_id": run_id,
         "runtime_bundle_path": artifact_path,
@@ -423,19 +581,76 @@ def download_stage_bundle(
         encoding="utf-8",
     )
 
-    print(
-        json.dumps(
-            {
-                "model_name": model_name,
-                "stage": stage,
-                "version": str(version.version),
-                "run_id": run_id,
-                "bundle_dir": str(bundle_dir),
-                "output_root": str(Path(output_root).resolve()),
-            },
-            indent=2,
-        )
+    return {
+        "model_name": model_name,
+        "stage": metadata["stage"],
+        "version": str(version.version),
+        "run_id": run_id,
+        "bundle_dir": str(bundle_dir),
+        "models_output_dir": str(models_dst.resolve()),
+        "processed_output_dir": str(processed_dst.resolve()),
+        "manifest_slot": manifest_slot,
+        "model_id": manifest["model_id"],
+        "output_root": str(Path(output_root).resolve()),
+    }
+
+
+def download_stage_bundle(
+    *,
+    model_name: str,
+    stage: str,
+    artifact_path: str,
+    output_root: str,
+    models_output_dir: str = "",
+    processed_output_dir: str = "",
+    manifest_slot: str = "stable",
+) -> None:
+    client = MlflowClient()
+    version = resolve_latest_model_version(
+        client=client,
+        model_name=model_name,
+        stage=stage,
     )
+    payload = download_registered_version_bundle(
+        model_name=model_name,
+        version=version,
+        artifact_path=artifact_path,
+        output_root=output_root,
+        models_output_dir=models_output_dir,
+        processed_output_dir=processed_output_dir,
+        manifest_slot=manifest_slot,
+        registry_stage=stage,
+    )
+    print(json.dumps(payload, indent=2))
+
+
+def download_version_bundle(
+    *,
+    model_name: str,
+    version_number: int,
+    artifact_path: str,
+    output_root: str,
+    models_output_dir: str = "",
+    processed_output_dir: str = "",
+    manifest_slot: str = "stable",
+) -> None:
+    client = MlflowClient()
+    version = resolve_model_version(
+        client=client,
+        model_name=model_name,
+        version=version_number,
+    )
+    payload = download_registered_version_bundle(
+        model_name=model_name,
+        version=version,
+        artifact_path=artifact_path,
+        output_root=output_root,
+        models_output_dir=models_output_dir,
+        processed_output_dir=processed_output_dir,
+        manifest_slot=manifest_slot,
+        registry_stage=getattr(version, "current_stage", None),
+    )
+    print(json.dumps(payload, indent=2))
 
 
 def main() -> None:
@@ -486,11 +701,26 @@ def main() -> None:
         )
         return
 
+    if args.command == "download-version":
+        download_version_bundle(
+            model_name=args.model_name,
+            version_number=args.version,
+            artifact_path=args.artifact_path,
+            output_root=args.output_root,
+            models_output_dir=args.models_output_dir,
+            processed_output_dir=args.processed_output_dir,
+            manifest_slot=args.manifest_slot,
+        )
+        return
+
     download_stage_bundle(
         model_name=args.model_name,
         stage=args.stage,
         artifact_path=args.artifact_path,
         output_root=args.output_root,
+        models_output_dir=args.models_output_dir,
+        processed_output_dir=args.processed_output_dir,
+        manifest_slot=args.manifest_slot,
     )
 
 

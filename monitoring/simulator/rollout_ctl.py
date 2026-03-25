@@ -7,6 +7,9 @@ import logging
 from monitoring.simulator.common import (
     fetch_rollout_state,
     promote_candidate_to_stable,
+    rollback_canary,
+    ROLLBACK_REGISTRY_ACTIONS,
+    ROLLBACK_REGISTRY_NONE,
     set_canary_percentage,
 )
 
@@ -24,11 +27,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    set_cmd = subparsers.add_parser("set-canary", help="Set candidate traffic percentage.")
-    set_cmd.add_argument("--percent", type=int, required=True, help="Candidate traffic percent (0-100).")
+    set_cmd = subparsers.add_parser(
+        "set-canary",
+        help="Set candidate traffic percentage.",
+    )
+    set_cmd.add_argument(
+        "--percent",
+        type=int,
+        required=True,
+        help="Candidate traffic percent (0-100).",
+    )
 
-    subparsers.add_parser("rollback", help="Rollback all traffic to stable (0% candidate).")
-    subparsers.add_parser("promote", help="Promote candidate to stable and reset canary to 0%.")
+    rollback_cmd = subparsers.add_parser(
+        "rollback",
+        help=(
+            "Hard rollback: route 100%% traffic to stable, stop candidate, "
+            "clear candidate slot, and optionally update registry."
+        ),
+    )
+    rollback_cmd.add_argument(
+        "--registry-action",
+        choices=ROLLBACK_REGISTRY_ACTIONS,
+        default=ROLLBACK_REGISTRY_NONE,
+        help="Optional MLflow Registry rollback action.",
+    )
+    subparsers.add_parser(
+        "promote",
+        help="Promote candidate to stable and reset canary to 0%%.",
+    )
     subparsers.add_parser("status", help="Print rollout state.")
     return parser
 
@@ -39,7 +65,7 @@ def main() -> None:
     if args.command == "set-canary":
         state = set_canary_percentage(args.percent, reload=True)
     elif args.command == "rollback":
-        state = set_canary_percentage(0, reload=True)
+        state = rollback_canary(registry_action=args.registry_action)
     elif args.command == "promote":
         state = promote_candidate_to_stable()
     else:

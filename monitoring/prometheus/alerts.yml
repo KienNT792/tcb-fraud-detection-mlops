@@ -77,6 +77,7 @@ groups:
         for: 15m
         labels:
           severity: warning
+          auto_rollback: "true"
         annotations:
           summary: "Candidate model behavior deviates from stable"
           description: "Candidate fraud prediction rate is significantly below stable baseline for 15 minutes."

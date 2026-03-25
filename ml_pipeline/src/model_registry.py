@@ -69,3 +69,25 @@ def find_latest_version_by_run(
     if not matched:
         return None
     return max(matched)
+
+
+def find_latest_version_by_stage(
+    *,
+    model_name: str,
+    stage: str,
+    exclude_versions: set[int] | None = None,
+) -> int | None:
+    client = MlflowClient()
+    versions: list[Any] = client.search_model_versions(
+        f"name='{model_name}'",
+    )
+    excluded = exclude_versions or set()
+    matched = [
+        int(v.version)
+        for v in versions
+        if getattr(v, "current_stage", "") == stage
+        and int(v.version) not in excluded
+    ]
+    if not matched:
+        return None
+    return max(matched)

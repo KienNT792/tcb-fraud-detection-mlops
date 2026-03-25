@@ -471,6 +471,7 @@ HEALTH_CHECKS=(
   "loadbalancer|http://localhost:${FASTAPI_PORT:-8000}/health|critical|10|10"
   "mlflow|http://localhost:${MLFLOW_PORT:-5000}|critical|10|10"
   "airflow|http://localhost:${AIRFLOW_PORT:-8080}/health|optional|18|10"
+  "alertmanager|http://localhost:${ALERTMANAGER_PORT:-9093}/-/ready|optional|12|10"
   "grafana|http://localhost:${GRAFANA_PORT:-3000}/api/health|optional|12|10"
 )
 

@@ -8,6 +8,7 @@ import random
 import shutil
 import string
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -19,7 +20,16 @@ import httpx
 from dotenv import load_dotenv
 
 from ml_pipeline.src.evaluate import run_evaluation
+from ml_pipeline.src.model_registry import (
+    find_latest_version_by_stage,
+    transition_model_version_stage,
+)
 from ml_pipeline.src.preprocess import run_preprocessing
+from ml_pipeline.src.registry_metadata import (
+    REGISTRY_METADATA_FILENAME,
+    read_registry_metadata,
+)
+from ml_pipeline.src.runtime_bundle import PROCESSED_RUNTIME_FILES
 from ml_pipeline.src.train import run_training
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +75,7 @@ CANDIDATE_CONTAINER_NAME = os.getenv(
 MODELS_ROOT = REPO_ROOT / "models"
 VERSIONS_DIR = MODELS_ROOT / "versions"
 CANDIDATE_DIR = MODELS_ROOT / "deployments" / "candidate"
+CANDIDATE_PROCESSED_DIR = CANDIDATE_DIR / "processed"
 CANARY_SPLIT_CONFIG = REPO_ROOT / "monitoring" / "loadbalancer" / "canary_split.conf"
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 RAW_DATASET_PATH = REPO_ROOT / "data" / "raw" / "tcb_credit_fraud_dataset.csv"
@@ -80,6 +91,19 @@ ROOT_ARTIFACTS = (
     MODEL_FILENAME,
     METRICS_FILENAME,
     FEATURE_IMPORTANCE_FILENAME,
+)
+PROMOTE_TARGET_STAGE = os.getenv("MLFLOW_PROMOTE_STAGE", "Production")
+RUNTIME_BUNDLE_ARTIFACT_PATH = os.getenv(
+    "MLFLOW_RUNTIME_BUNDLE_PATH",
+    "runtime_bundle",
+)
+ROLLBACK_REGISTRY_NONE = "none"
+ROLLBACK_REGISTRY_ARCHIVE_CURRENT = "archive-current-production"
+ROLLBACK_REGISTRY_RESTORE_PREVIOUS = "restore-previous-production"
+ROLLBACK_REGISTRY_ACTIONS = (
+    ROLLBACK_REGISTRY_NONE,
+    ROLLBACK_REGISTRY_ARCHIVE_CURRENT,
+    ROLLBACK_REGISTRY_RESTORE_PREVIOUS,
 )
 
 
@@ -132,9 +156,13 @@ def read_manifest(model_dir: Path) -> dict[str, Any] | None:
     return _read_json(manifest_path)
 
 
-def _reset_model_artifacts(target_dir: Path) -> None:
+def _reset_runtime_bundle(
+    target_dir: Path,
+    *,
+    processed_dir: Path | None = None,
+) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
-    for filename in (*ROOT_ARTIFACTS, MANIFEST_FILENAME):
+    for filename in (*ROOT_ARTIFACTS, MANIFEST_FILENAME, REGISTRY_METADATA_FILENAME):
         artifact_path = target_dir / filename
         if artifact_path.exists():
             artifact_path.unlink()
@@ -143,8 +171,26 @@ def _reset_model_artifacts(target_dir: Path) -> None:
     if evaluation_dir.exists():
         shutil.rmtree(evaluation_dir)
 
+    resolved_processed_dir = processed_dir or (target_dir / "processed")
+    if resolved_processed_dir.exists():
+        for filename in PROCESSED_RUNTIME_FILES:
+            artifact_path = resolved_processed_dir / filename
+            if artifact_path.exists():
+                artifact_path.unlink()
+        if (
+            resolved_processed_dir != PROCESSED_DIR
+            and resolved_processed_dir.exists()
+            and not any(resolved_processed_dir.iterdir())
+        ):
+            resolved_processed_dir.rmdir()
 
-def copy_model_artifacts(source_dir: Path, target_dir: Path) -> None:
+
+def copy_model_artifacts(
+    source_dir: Path,
+    target_dir: Path,
+    *,
+    reset_target: bool = True,
+) -> None:
     source_path = source_dir.resolve()
     target_path = target_dir.resolve()
     if not (source_path / MODEL_FILENAME).exists():
@@ -152,7 +198,8 @@ def copy_model_artifacts(source_dir: Path, target_dir: Path) -> None:
             f"Model artifact not found at {source_path / MODEL_FILENAME}"
         )
 
-    _reset_model_artifacts(target_path)
+    if reset_target:
+        _reset_runtime_bundle(target_path)
 
     for filename in ROOT_ARTIFACTS:
         src = source_path / filename
@@ -166,6 +213,43 @@ def copy_model_artifacts(source_dir: Path, target_dir: Path) -> None:
             target_path / EVALUATION_DIRNAME,
             dirs_exist_ok=True,
         )
+
+    registry_metadata = read_registry_metadata(source_path)
+    if registry_metadata:
+        (target_path / REGISTRY_METADATA_FILENAME).write_text(
+            json.dumps(registry_metadata, indent=2),
+            encoding="utf-8",
+        )
+
+
+def copy_processed_artifacts(source_dir: Path, target_dir: Path) -> None:
+    source_path = source_dir.resolve()
+    target_path = target_dir.resolve()
+    target_path.mkdir(parents=True, exist_ok=True)
+
+    for filename in PROCESSED_RUNTIME_FILES:
+        src = source_path / filename
+        if not src.exists():
+            raise FileNotFoundError(
+                f"Processed artifact not found at {src}"
+            )
+        shutil.copy2(src, target_path / filename)
+
+
+def copy_runtime_bundle(
+    *,
+    source_model_dir: Path,
+    source_processed_dir: Path,
+    target_model_dir: Path,
+    target_processed_dir: Path,
+) -> None:
+    _reset_runtime_bundle(target_model_dir, processed_dir=target_processed_dir)
+    copy_model_artifacts(
+        source_model_dir,
+        target_model_dir,
+        reset_target=False,
+    )
+    copy_processed_artifacts(source_processed_dir, target_processed_dir)
 
 
 def collect_model_summary(model_dir: Path) -> dict[str, Any]:
@@ -190,6 +274,83 @@ def collect_model_summary(model_dir: Path) -> dict[str, Any]:
         }
 
     return summary
+
+
+def registry_manifest_fields(model_dir: Path) -> dict[str, Any]:
+    registry_metadata = read_registry_metadata(model_dir)
+    if not registry_metadata:
+        return {}
+    return {
+        "registry_model_name": registry_metadata.get("model_name"),
+        "registry_version": str(registry_metadata.get("version")),
+        "registry_stage": registry_metadata.get("stage"),
+        "run_id": registry_metadata.get("run_id"),
+        "runtime_bundle_path": registry_metadata.get("runtime_bundle_artifact_path"),
+    }
+
+
+def current_stable_registry_target() -> tuple[str, int] | None:
+    stable_manifest = read_manifest(MODELS_ROOT) or {}
+    model_name = stable_manifest.get("registry_model_name")
+    version = stable_manifest.get("registry_version")
+    if not model_name or version in (None, ""):
+        return None
+    return str(model_name), int(str(version))
+
+
+def previous_stable_registry_target() -> tuple[str, int] | None:
+    stable_manifest = read_manifest(MODELS_ROOT) or {}
+    model_name = stable_manifest.get("previous_registry_model_name") or stable_manifest.get(
+        "registry_model_name"
+    )
+    version = stable_manifest.get("previous_registry_version")
+    if model_name and version not in (None, ""):
+        return str(model_name), int(str(version))
+
+    current_target = current_stable_registry_target()
+    if current_target is None:
+        return None
+
+    current_model_name, current_version = current_target
+    fallback_version = find_latest_version_by_stage(
+        model_name=current_model_name,
+        stage="Archived",
+        exclude_versions={current_version},
+    )
+    if fallback_version is None:
+        return None
+    return current_model_name, fallback_version
+
+
+def sync_registry_version_to_stable(
+    *,
+    model_name: str,
+    version: int,
+) -> None:
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
+    command = [sys.executable, "scripts/runtime_bundle_registry.py"]
+    if tracking_uri:
+        command.extend(["--tracking-uri", tracking_uri])
+    command.extend(
+        [
+            "download-version",
+            "--model-name",
+            model_name,
+            "--version",
+            str(version),
+            "--artifact-path",
+            RUNTIME_BUNDLE_ARTIFACT_PATH,
+            "--output-root",
+            str(REPO_ROOT),
+            "--models-output-dir",
+            str(MODELS_ROOT),
+            "--processed-output-dir",
+            str(PROCESSED_DIR),
+            "--manifest-slot",
+            "stable",
+        ]
+    )
+    _run_command(command)
 
 
 def write_manifest(
@@ -324,7 +485,7 @@ def stop_candidate_service() -> None:
 
 
 def clear_candidate_slot(*, stop_service: bool = True) -> None:
-    _reset_model_artifacts(CANDIDATE_DIR)
+    _reset_runtime_bundle(CANDIDATE_DIR, processed_dir=CANDIDATE_PROCESSED_DIR)
     if stop_service:
         stop_candidate_service()
 
@@ -386,6 +547,106 @@ def set_canary_percentage(candidate_percentage: int, *, reload: bool = True) -> 
     if reload:
         reload_loadbalancer()
     return fetch_rollout_state()
+
+
+def rollback_canary(
+    *,
+    registry_action: str = ROLLBACK_REGISTRY_NONE,
+) -> dict[str, Any]:
+    bootstrap_runtime_layout()
+    if registry_action not in ROLLBACK_REGISTRY_ACTIONS:
+        raise ValueError(
+            "registry_action must be one of: "
+            + ", ".join(ROLLBACK_REGISTRY_ACTIONS)
+        )
+
+    rollback_result: dict[str, Any] = {
+        "traffic_reset": True,
+        "candidate_stopped": True,
+        "candidate_cleared": True,
+        "registry_action": registry_action,
+        "registry_result": "skipped",
+    }
+
+    set_canary_percentage(0)
+    candidate_manifest = read_manifest(CANDIDATE_DIR) or {}
+    stable_manifest = read_manifest(MODELS_ROOT) or {}
+
+    if registry_action == ROLLBACK_REGISTRY_ARCHIVE_CURRENT:
+        current_target = current_stable_registry_target()
+        if current_target is not None:
+            model_name, version = current_target
+            transition_model_version_stage(
+                model_name=model_name,
+                version=version,
+                stage="Archived",
+                archive_existing_versions=False,
+            )
+            rollback_result["registry_result"] = "archived-current-production"
+            rollback_result["archived_registry_model_name"] = model_name
+            rollback_result["archived_registry_version"] = str(version)
+        else:
+            rollback_result["registry_result"] = "no-current-production-version"
+    elif registry_action == ROLLBACK_REGISTRY_RESTORE_PREVIOUS:
+        current_target = current_stable_registry_target()
+        previous_target = previous_stable_registry_target()
+        if previous_target is not None:
+            model_name, version = previous_target
+            transition_model_version_stage(
+                model_name=model_name,
+                version=version,
+                stage=PROMOTE_TARGET_STAGE,
+                archive_existing_versions=True,
+            )
+            sync_registry_version_to_stable(
+                model_name=model_name,
+                version=version,
+            )
+            restored_model_id = f"{model_name}-v{version}"
+            restored_manifest = read_manifest(MODELS_ROOT) or {}
+            restored_manifest.update(
+                {
+                    "restored_at": _utc_now(),
+                    "rollback_registry_action": registry_action,
+                    "rollback_previous_model_id": stable_manifest.get("model_id"),
+                    "rollback_previous_registry_model_name": (
+                        current_target[0] if current_target else None
+                    ),
+                    "rollback_previous_registry_version": (
+                        str(current_target[1]) if current_target else None
+                    ),
+                    "previous_stable_model_id": stable_manifest.get(
+                        "previous_stable_model_id"
+                    ),
+                    "previous_registry_model_name": stable_manifest.get(
+                        "previous_registry_model_name"
+                    ),
+                    "previous_registry_version": stable_manifest.get(
+                        "previous_registry_version"
+                    ),
+                    "previous_registry_stage": stable_manifest.get(
+                        "previous_registry_stage"
+                    ),
+                    "previous_run_id": stable_manifest.get("previous_run_id"),
+                    "previous_runtime_bundle_path": stable_manifest.get(
+                        "previous_runtime_bundle_path"
+                    ),
+                }
+            )
+            _write_json(_manifest_path(MODELS_ROOT), restored_manifest)
+            wait_for_model_version(STABLE_URL, restored_model_id)
+            rollback_result["registry_result"] = "restored-previous-production"
+            rollback_result["restored_registry_model_name"] = model_name
+            rollback_result["restored_registry_version"] = str(version)
+        else:
+            rollback_result["registry_result"] = "no-previous-production-version"
+
+    clear_candidate_slot(stop_service=True)
+    state = fetch_rollout_state()
+    state["rollback"] = rollback_result
+    if candidate_manifest:
+        state["rollback"]["candidate_model_id"] = candidate_manifest.get("model_id")
+    return state
 
 
 def fetch_rollout_state() -> dict[str, Any]:
@@ -775,16 +1036,26 @@ def stage_candidate_model(
     *,
     model_id: str,
     source_model_dir: Path,
+    source_processed_dir: Path = PROCESSED_DIR,
     initial_percentage: int = 10,
 ) -> dict[str, Any]:
     bootstrap_runtime_layout()
-    copy_model_artifacts(source_model_dir, CANDIDATE_DIR)
+    copy_runtime_bundle(
+        source_model_dir=source_model_dir,
+        source_processed_dir=source_processed_dir,
+        target_model_dir=CANDIDATE_DIR,
+        target_processed_dir=CANDIDATE_PROCESSED_DIR,
+    )
     write_manifest(
         CANDIDATE_DIR,
         slot="candidate",
         model_id=model_id,
         source_model_dir=source_model_dir,
         metrics_summary=collect_model_summary(CANDIDATE_DIR),
+        extra={
+            "processed_dir": str(source_processed_dir.resolve()),
+            **registry_manifest_fields(source_model_dir),
+        },
     )
     ensure_candidate_service_running()
     wait_for_model_version(CANDIDATE_URL, model_id)
@@ -805,19 +1076,57 @@ def promote_candidate_to_stable() -> dict[str, Any]:
         raise FileNotFoundError(
             f"Candidate manifest not found at {_manifest_path(CANDIDATE_DIR)}"
         )
+    previous_stable_manifest = read_manifest(MODELS_ROOT) or {}
 
     candidate_model_id = str(candidate_manifest.get("model_id"))
     candidate_source_dir = Path(
         candidate_manifest.get("source_model_dir") or CANDIDATE_DIR
     )
-    copy_model_artifacts(CANDIDATE_DIR, MODELS_ROOT)
+    registry_model_name = candidate_manifest.get("registry_model_name")
+    registry_version = candidate_manifest.get("registry_version")
+    if registry_model_name and registry_version:
+        transition_model_version_stage(
+            model_name=str(registry_model_name),
+            version=int(str(registry_version)),
+            stage=PROMOTE_TARGET_STAGE,
+            archive_existing_versions=True,
+        )
+
+    copy_runtime_bundle(
+        source_model_dir=CANDIDATE_DIR,
+        source_processed_dir=CANDIDATE_PROCESSED_DIR,
+        target_model_dir=MODELS_ROOT,
+        target_processed_dir=PROCESSED_DIR,
+    )
     write_manifest(
         MODELS_ROOT,
         slot="stable",
         model_id=candidate_model_id,
         source_model_dir=candidate_source_dir,
         metrics_summary=collect_model_summary(MODELS_ROOT),
-        extra={"promoted_at": _utc_now()},
+        extra={
+            "promoted_at": _utc_now(),
+            "processed_dir": str(PROCESSED_DIR.resolve()),
+            "registry_model_name": registry_model_name,
+            "registry_version": registry_version,
+            "registry_stage": PROMOTE_TARGET_STAGE if registry_model_name else None,
+            "run_id": candidate_manifest.get("run_id"),
+            "runtime_bundle_path": candidate_manifest.get("runtime_bundle_path"),
+            "previous_stable_model_id": previous_stable_manifest.get("model_id"),
+            "previous_registry_model_name": previous_stable_manifest.get(
+                "registry_model_name"
+            ),
+            "previous_registry_version": previous_stable_manifest.get(
+                "registry_version"
+            ),
+            "previous_registry_stage": previous_stable_manifest.get(
+                "registry_stage"
+            ),
+            "previous_run_id": previous_stable_manifest.get("run_id"),
+            "previous_runtime_bundle_path": previous_stable_manifest.get(
+                "runtime_bundle_path"
+            ),
+        },
     )
     wait_for_model_version(STABLE_URL, candidate_model_id)
     set_canary_percentage(0)
@@ -842,6 +1151,7 @@ def manual_stage_candidate_from_stable(
     return stage_candidate_model(
         model_id=resolved_model_id,
         source_model_dir=MODELS_ROOT,
+        source_processed_dir=PROCESSED_DIR,
         initial_percentage=initial_percentage,
     )
 
@@ -883,6 +1193,7 @@ def manual_train_and_stage_candidate(
     return stage_candidate_model(
         model_id=resolved_model_id,
         source_model_dir=version_dir,
+        source_processed_dir=PROCESSED_DIR,
         initial_percentage=initial_percentage,
     )
 
