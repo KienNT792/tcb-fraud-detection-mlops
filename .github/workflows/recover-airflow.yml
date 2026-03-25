@@ -99,12 +99,31 @@ jobs:
               if curl --fail --silent --show-error http://localhost:8080/health >/dev/null 2>&1; then
                 echo "Airflow is healthy."
                 docker compose ps airflow
-                exit 0
+                break
               fi
               sleep 10
             done
 
-            echo "Airflow did not become healthy."
-            docker compose ps airflow || true
-            docker compose logs --tail=200 airflow || true
-            exit 1
+            if ! curl --fail --silent --show-error http://localhost:8080/health >/dev/null 2>&1; then
+              echo "Airflow did not become healthy."
+              docker compose ps airflow || true
+              docker compose logs --tail=200 airflow || true
+              exit 1
+            fi
+
+            echo "Verifying Airflow runtime packages..."
+            docker exec tcb-airflow /opt/airflow/venv/bin/python -c \
+              "import sys, mlflow; from mlflow import MlflowClient; print(sys.executable); print(mlflow.__version__)"
+
+            echo "Checking DAG import errors..."
+            import_errors="$(docker exec tcb-airflow /opt/airflow/venv/bin/python -m airflow dags list-import-errors 2>&1 || true)"
+            printf '%s\n' "$import_errors"
+            if printf '%s\n' "$import_errors" | grep -q 'fraud_pipeline.py'; then
+              echo "fraud_pipeline.py still has import errors."
+              exit 1
+            fi
+
+            echo "Checking DAG visibility..."
+            docker exec tcb-airflow /opt/airflow/venv/bin/python -m airflow dags list | grep -i fraud || true
+
+            exit 0
