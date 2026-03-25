@@ -25,6 +25,22 @@ else
   DEPLOY_PATH="$HOME/${DEPLOY_PATH_INPUT}"
 fi
 
+candidate_manifest_path() {
+  printf '%s\n' "$DEPLOY_PATH/models/deployments/candidate/model_manifest.json"
+}
+
+candidate_service_enabled() {
+  [[ -f "$(candidate_manifest_path)" ]]
+}
+
+compose_stack() {
+  local -a profile_args=()
+  if candidate_service_enabled; then
+    profile_args=(--profile candidate)
+  fi
+  IMAGE_TAG="$IMAGE_TAG" docker compose "${profile_args[@]}" "$@"
+}
+
 require_cmd() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -39,16 +55,18 @@ show_health_failure_context() {
 
   echo "Health check failed for ${failed_name}: ${failed_endpoint}"
   echo "docker compose ps:"
-  IMAGE_TAG="$IMAGE_TAG" docker compose ps || true
+  compose_stack ps || true
 
   echo "Recent logs: fastapi-stable"
-  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 fastapi-stable || true
+  compose_stack logs --tail=120 fastapi-stable || true
 
-  echo "Recent logs: fastapi-candidate"
-  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 fastapi-candidate || true
+  if candidate_service_enabled; then
+    echo "Recent logs: fastapi-candidate"
+    compose_stack logs --tail=120 fastapi-candidate || true
+  fi
 
   echo "Recent logs: loadbalancer"
-  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 loadbalancer || true
+  compose_stack logs --tail=120 loadbalancer || true
 }
 
 wait_for_endpoint() {
@@ -76,7 +94,7 @@ show_optional_health_warning() {
 
   echo "Non-critical health check failed for ${service_name}: ${endpoint}"
   echo "Recent logs: ${service_name}"
-  IMAGE_TAG="$IMAGE_TAG" docker compose logs --tail=120 "$service_name" || true
+  compose_stack logs --tail=120 "$service_name" || true
 }
 
 bootstrap_runtime_bundle_from_repo() {
@@ -131,6 +149,49 @@ bootstrap_runtime_bundle_from_repo() {
     '
 
   echo "Bootstrapped runtime bundle from repository artifacts."
+}
+
+bootstrap_mlflow_registry_from_repo() {
+  local model_artifact_dir="$DEPLOY_PATH/$BOOTSTRAP_RUNTIME_BUNDLE_DIR/mlflow_model"
+  local processed_dir="$DEPLOY_PATH/$BOOTSTRAP_RUNTIME_BUNDLE_DIR/processed"
+
+  if [[ ! -f "$model_artifact_dir/MLmodel" ]]; then
+    echo "Missing bootstrap MLflow model directory: $model_artifact_dir"
+    return 1
+  fi
+
+  if [[ ! -f "$DEPLOY_PATH/models/xgb_fraud_model.joblib" ]]; then
+    echo "Missing bootstrap model artifact: $DEPLOY_PATH/models/xgb_fraud_model.joblib"
+    return 1
+  fi
+
+  echo "Bootstrapping first MLflow Registry version from repository artifacts."
+  docker run --rm \
+    --network host \
+    --user "$(id -u):$(id -g)" \
+    -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+    -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+    -e MLFLOW_S3_ENDPOINT_URL="http://127.0.0.1:${MINIO_API_PORT:-9000}" \
+    -v "$DEPLOY_PATH:/workspace" \
+    -w /workspace \
+    ghcr.io/mlflow/mlflow:v2.14.3 \
+    python scripts/runtime_bundle_registry.py \
+      --tracking-uri "http://127.0.0.1:${MLFLOW_PORT:-5000}" \
+      bootstrap-artifacts \
+      --model-name "$MLFLOW_REGISTERED_MODEL_NAME" \
+      --stage "$MLFLOW_DEPLOY_STAGE" \
+      --model-artifact-dir "/workspace/${BOOTSTRAP_RUNTIME_BUNDLE_DIR}/mlflow_model" \
+      --models-dir /workspace/models \
+      --processed-dir "/workspace/${BOOTSTRAP_RUNTIME_BUNDLE_DIR}/processed"
+}
+
+prune_disabled_candidate_service() {
+  if candidate_service_enabled; then
+    return 0
+  fi
+
+  IMAGE_TAG="$IMAGE_TAG" docker compose --profile candidate stop fastapi-candidate >/dev/null 2>&1 || true
+  IMAGE_TAG="$IMAGE_TAG" docker compose --profile candidate rm -f fastapi-candidate >/dev/null 2>&1 || true
 }
 
 sync_runtime_env_file() {
@@ -325,24 +386,15 @@ if [[ -z "${DOCKERHUB_TOKEN:-}" ]]; then
   exit 1
 fi
 
-IMAGE_TAG="$IMAGE_TAG" docker compose config >/dev/null
-
-HEALTH_CHECKS=(
-  "fastapi-stable|http://127.0.0.1:${FASTAPI_STABLE_PORT:-8002}/health|critical|10|10"
-  "fastapi-candidate|http://127.0.0.1:${FASTAPI_CANDIDATE_PORT:-8003}/health|critical|10|10"
-  "loadbalancer|http://localhost:${FASTAPI_PORT:-8000}/health|critical|10|10"
-  "mlflow|http://localhost:${MLFLOW_PORT:-5000}|critical|10|10"
-  "airflow|http://localhost:${AIRFLOW_PORT:-8080}/health|optional|18|10"
-  "grafana|http://localhost:${GRAFANA_PORT:-3000}/api/health|optional|12|10"
-)
+compose_stack config >/dev/null
 
 printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
 echo "Pulling application image: ${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 docker pull "${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
-IMAGE_TAG="$IMAGE_TAG" docker compose pull
-IMAGE_TAG="$IMAGE_TAG" docker compose up -d minio minio-init mlflow
+compose_stack pull
+compose_stack up -d minio minio-init mlflow
 
 wait_for_endpoint "mlflow" "http://127.0.0.1:${MLFLOW_PORT:-5000}" 24 5
 
@@ -375,13 +427,34 @@ if [[ "$SYNC_RUNTIME_BUNDLE_FROM_REGISTRY" == "true" ]]; then
     if [[ "$ALLOW_REPO_BOOTSTRAP_ON_EMPTY_REGISTRY" == "true" ]] && \
       [[ "$runtime_bundle_output" == *"Registered Model with name=${MLFLOW_REGISTERED_MODEL_NAME} not found"* || \
          "$runtime_bundle_output" == *"No model version found for name=${MLFLOW_REGISTERED_MODEL_NAME} stage=${MLFLOW_DEPLOY_STAGE}"* ]]; then
-      echo "MLflow Registry is empty for ${MLFLOW_REGISTERED_MODEL_NAME}/${MLFLOW_DEPLOY_STAGE}. Falling back to repository bootstrap artifacts."
-      bootstrap_runtime_bundle_from_repo
+      echo "MLflow Registry is empty for ${MLFLOW_REGISTERED_MODEL_NAME}/${MLFLOW_DEPLOY_STAGE}. Bootstrapping the first version from repository artifacts."
+      bootstrap_mlflow_registry_from_repo
+      runtime_bundle_output="$(
+        docker run --rm \
+          --network host \
+          --user "$(id -u):$(id -g)" \
+          -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+          -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+          -e MLFLOW_S3_ENDPOINT_URL="http://127.0.0.1:${MINIO_API_PORT:-9000}" \
+          -v "$DEPLOY_PATH:/workspace" \
+          -w /workspace \
+          ghcr.io/mlflow/mlflow:v2.14.3 \
+          python scripts/runtime_bundle_registry.py \
+            --tracking-uri "http://127.0.0.1:${MLFLOW_PORT:-5000}" \
+            download-stage \
+            --model-name "$MLFLOW_REGISTERED_MODEL_NAME" \
+            --stage "$MLFLOW_DEPLOY_STAGE" \
+            --artifact-path "$MLFLOW_RUNTIME_BUNDLE_PATH" \
+            --output-root /workspace 2>&1
+      )"
+      printf '%s\n' "$runtime_bundle_output"
     else
     echo "Failed to sync runtime bundle from MLflow Registry."
     echo "If the registered model ${MLFLOW_REGISTERED_MODEL_NAME} does not exist yet,"
     echo "bootstrap it once from a machine that already has models/ and data/processed/:"
     echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} bootstrap-run --run-id <training_run_id> --model-name ${MLFLOW_REGISTERED_MODEL_NAME} --stage ${MLFLOW_DEPLOY_STAGE}"
+    echo "Or bootstrap the committed repo artifacts with:"
+    echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} bootstrap-artifacts --model-name ${MLFLOW_REGISTERED_MODEL_NAME} --stage ${MLFLOW_DEPLOY_STAGE}"
     echo "If the registered model exists but was trained before runtime bundles were published,"
     echo "backfill the latest stage bundle with:"
     echo "  python scripts/runtime_bundle_registry.py --tracking-uri http://127.0.0.1:${MLFLOW_PORT:-5000} publish-stage --model-name ${MLFLOW_REGISTERED_MODEL_NAME} --stage ${MLFLOW_DEPLOY_STAGE}"
@@ -390,7 +463,22 @@ if [[ "$SYNC_RUNTIME_BUNDLE_FROM_REGISTRY" == "true" ]]; then
   fi
 fi
 
-IMAGE_TAG="$IMAGE_TAG" docker compose up -d --no-build --remove-orphans
+compose_stack up -d --no-build --remove-orphans
+prune_disabled_candidate_service
+
+HEALTH_CHECKS=(
+  "fastapi-stable|http://127.0.0.1:${FASTAPI_STABLE_PORT:-8002}/health|critical|10|10"
+  "loadbalancer|http://localhost:${FASTAPI_PORT:-8000}/health|critical|10|10"
+  "mlflow|http://localhost:${MLFLOW_PORT:-5000}|critical|10|10"
+  "airflow|http://localhost:${AIRFLOW_PORT:-8080}/health|optional|18|10"
+  "grafana|http://localhost:${GRAFANA_PORT:-3000}/api/health|optional|12|10"
+)
+
+if candidate_service_enabled; then
+  HEALTH_CHECKS+=(
+    "fastapi-candidate|http://127.0.0.1:${FASTAPI_CANDIDATE_PORT:-8003}/health|critical|10|10"
+  )
+fi
 
 echo "Waiting for services to become healthy..."
 sleep 20

@@ -2,13 +2,13 @@ groups:
   - name: fraud-api-alerts
     rules:
       - alert: FraudApiDown
-        expr: up{job=~"fastapi-stable|fastapi-candidate"} == 0
+        expr: up{job="fastapi-stable"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Fraud API instance is down"
-          description: "Prometheus cannot scrape {{ $labels.job }} for 2 minutes."
+          summary: "Stable fraud API instance is down"
+          description: "Prometheus cannot scrape the stable serving API for 2 minutes."
 
       - alert: FraudApiHighErrorRate
         expr: |

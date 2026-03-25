@@ -79,6 +79,38 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(REPO_ROOT / "data" / "processed"),
     )
 
+    bootstrap_artifacts_parser = subparsers.add_parser(
+        "bootstrap-artifacts",
+        help="Create the first MLflow run/model version from repository bootstrap artifacts.",
+    )
+    bootstrap_artifacts_parser.add_argument(
+        "--model-name",
+        default=os.getenv("MLFLOW_REGISTERED_MODEL_NAME", "tcb-fraud-xgboost"),
+    )
+    bootstrap_artifacts_parser.add_argument(
+        "--stage",
+        default=os.getenv("MLFLOW_DEPLOY_STAGE", "Production"),
+    )
+    bootstrap_artifacts_parser.add_argument(
+        "--model-artifact-dir",
+        default=str(REPO_ROOT / "bootstrap_runtime_bundle" / "mlflow_model"),
+    )
+    bootstrap_artifacts_parser.add_argument(
+        "--models-dir",
+        default=str(REPO_ROOT / "models"),
+    )
+    bootstrap_artifacts_parser.add_argument(
+        "--processed-dir",
+        default=str(REPO_ROOT / "bootstrap_runtime_bundle" / "processed"),
+    )
+    bootstrap_artifacts_parser.add_argument(
+        "--experiment-name",
+        default=os.getenv(
+            "MLFLOW_EXPERIMENT_NAME",
+            "fraud-detection-bootstrap",
+        ),
+    )
+
     publish_stage_parser = subparsers.add_parser(
         "publish-stage",
         help="Attach runtime bundle artifacts to the latest model version in a registry stage.",
@@ -131,6 +163,23 @@ def configure_tracking_uri(tracking_uri: str) -> None:
         mlflow.set_tracking_uri(tracking_uri)
 
 
+def log_metrics_from_file(models_dir: str) -> None:
+    metrics_path = Path(models_dir) / "metrics.json"
+    if not metrics_path.exists():
+        return
+
+    with open(metrics_path, encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    numeric_metrics = {
+        key: float(value)
+        for key, value in payload.items()
+        if isinstance(value, (int, float))
+    }
+    if numeric_metrics:
+        mlflow.log_metrics(numeric_metrics)
+
+
 def publish_run(
     *,
     run_id: str,
@@ -167,6 +216,97 @@ def ensure_registered_model(
             raise
 
     client.create_registered_model(model_name)
+
+
+def bootstrap_artifacts(
+    *,
+    model_name: str,
+    stage: str,
+    model_artifact_dir: str,
+    models_dir: str,
+    processed_dir: str,
+    experiment_name: str,
+) -> None:
+    client = MlflowClient()
+    ensure_registered_model(client=client, model_name=model_name)
+
+    model_artifact_path = Path(model_artifact_dir)
+    if not (model_artifact_path / "MLmodel").exists():
+        raise FileNotFoundError(
+            f"Missing MLflow model definition at {model_artifact_path / 'MLmodel'}"
+        )
+
+    models_path = Path(models_dir)
+    processed_path = Path(processed_dir)
+    for filename in MODEL_RUNTIME_FILES:
+        if not (models_path / filename).exists():
+            raise FileNotFoundError(
+                f"Missing required model artifact: {models_path / filename}"
+            )
+    for filename in PROCESSED_RUNTIME_FILES:
+        if not (processed_path / filename).exists():
+            raise FileNotFoundError(
+                f"Missing required processed artifact: {processed_path / filename}"
+            )
+
+    mlflow.set_experiment(experiment_name)
+    run_name = f"bootstrap-{model_name}-{stage.lower()}"
+    with mlflow.start_run(run_name=run_name):
+        mlflow.set_tags(
+            {
+                "pipeline.source": "repo-bootstrap",
+                "pipeline.stage": "bootstrap",
+                "bootstrap.model_name": model_name,
+                "bootstrap.target_stage": stage,
+                "bootstrap.model_artifact_dir": str(model_artifact_path.resolve()),
+                "artifact.models_dir": str(models_path.resolve()),
+                "artifact.processed_dir": str(processed_path.resolve()),
+            }
+        )
+        mlflow.log_artifacts(str(model_artifact_path), artifact_path="model")
+        log_metrics_from_file(models_dir)
+        log_runtime_bundle(
+            models_dir=models_dir,
+            processed_dir=processed_dir,
+            extra_metadata={
+                "published_at": datetime.now(tz=timezone.utc).isoformat(),
+                "published_by": "runtime_bundle_registry.py",
+                "bootstrap_model_name": model_name,
+                "bootstrap_stage": stage,
+            },
+        )
+        mlflow.set_tag("runtime_bundle.ready", "true")
+        mlflow.set_tag(
+            "runtime_bundle.artifact_path",
+            RUNTIME_BUNDLE_ARTIFACT_PATH,
+        )
+        run_id = mlflow.active_run().info.run_id
+
+    version = register_model_from_run(
+        run_id=run_id,
+        artifact_path="model",
+        model_name=model_name,
+    )
+    transition_model_version_stage(
+        model_name=model_name,
+        version=version,
+        stage=stage,
+        archive_existing_versions=True,
+    )
+    print(
+        json.dumps(
+            {
+                "model_name": model_name,
+                "stage": stage,
+                "version": version,
+                "run_id": run_id,
+                "model_artifact_dir": str(model_artifact_path.resolve()),
+                "models_dir": str(models_path.resolve()),
+                "processed_dir": str(processed_path.resolve()),
+            },
+            indent=2,
+        )
+    )
 
 
 def bootstrap_run(
@@ -318,6 +458,17 @@ def main() -> None:
             stage=args.stage,
             models_dir=args.models_dir,
             processed_dir=args.processed_dir,
+        )
+        return
+
+    if args.command == "bootstrap-artifacts":
+        bootstrap_artifacts(
+            model_name=args.model_name,
+            stage=args.stage,
+            model_artifact_dir=args.model_artifact_dir,
+            models_dir=args.models_dir,
+            processed_dir=args.processed_dir,
+            experiment_name=args.experiment_name,
         )
         return
 

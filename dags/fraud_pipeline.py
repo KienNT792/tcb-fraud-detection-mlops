@@ -265,7 +265,11 @@ def stage_candidate_after_eval(**context: Any) -> dict[str, Any]:
 def verify_candidate_health(**context: Any) -> None:
     """Poll candidate FastAPI /health endpoint to confirm model loaded.
 
-    Waits up to 60 seconds for the candidate container to report the
+    If the candidate service profile is not running, the staged artifacts are
+    left on disk and verification is skipped. When the profile is started
+    later, the candidate container will load the staged manifest.
+
+    Otherwise waits up to 60 seconds for the candidate container to report the
     expected model_id from the stage_candidate task.
 
     Raises:
@@ -278,6 +282,29 @@ def verify_candidate_health(**context: Any) -> None:
 
     candidate_url = CANDIDATE_URL.rstrip("/")
     health_url = f"{candidate_url}/health"
+
+    service_probe_attempts = 3
+    service_probe_wait_seconds = 2
+    for probe_attempt in range(1, service_probe_attempts + 1):
+        try:
+            request = urllib.request.Request(health_url, method="GET")
+            with urllib.request.urlopen(request, timeout=5):
+                break
+        except Exception as exc:
+            print(
+                "Candidate reachability probe "
+                f"{probe_attempt}/{service_probe_attempts}"
+                f" failed: {exc}"
+            )
+            if probe_attempt < service_probe_attempts:
+                time.sleep(service_probe_wait_seconds)
+    else:
+        print(
+            "Candidate service is not running. Candidate artifacts were "
+            "staged successfully and will load when the `candidate` Docker "
+            "profile is started."
+        )
+        return
 
     max_attempts = 12
     wait_seconds = 5

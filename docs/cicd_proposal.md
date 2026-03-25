@@ -37,10 +37,11 @@ CD hiện auto chạy trực tiếp khi push lên branch `main` hoặc `dev/ver2
    - `git pull`
    - đồng bộ `.env` từ `DEPLOY_ENV_B64` nếu secret này được cấu hình
    - `docker login`
+   - nếu MLflow Registry đang rỗng thì bootstrap model đầu tiên từ `bootstrap_runtime_bundle/` vào MLflow
    - `docker compose pull`
    - `docker compose up -d --no-build --remove-orphans`
    - health check
-   - FastAPI Stable + Candidate
+   - FastAPI Stable luôn chạy; FastAPI Candidate chỉ chạy khi có `models/deployments/candidate/model_manifest.json`
    - Nginx Load Balancer
    - MLflow server
    - MinIO
@@ -57,8 +58,8 @@ CD hiện auto chạy trực tiếp khi push lên branch `main` hoặc `dev/ver2
 1. Airflow định kỳ kích hoạt DAG huấn luyện (02:00 UTC hàng ngày).
 2. Pipeline training ghi metric và artifact vào MLflow.
 3. MLflow sử dụng MinIO làm artifact store thông qua S3-compatible endpoint.
-4. Nếu model mới PASS evaluation → `stage_candidate` copy artifacts → `verify_candidate` poll health.
-5. Candidate FastAPI auto-reload model qua manifest-based hot-reload.
+4. Nếu model mới PASS evaluation → `stage_candidate` copy artifacts → ghi `model_manifest.json` vào candidate slot.
+5. Candidate FastAPI chỉ cần được bật khi có candidate manifest; khi container chạy lên thì sẽ auto-reload model qua manifest-based hot-reload.
 6. Prometheus scrape:
    - FastAPI `/metrics`
    - `node-exporter` cho CPU, RAM, disk trên VPS

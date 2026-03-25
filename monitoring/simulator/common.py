@@ -52,6 +52,15 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("SIMULATOR_REQUEST_TIMEOUT_SECONDS", "
 DEFAULT_THRESHOLD = float(
     os.getenv("SIMULATOR_DRIFT_THRESHOLD", os.getenv("DRIFT_ALERT_THRESHOLD", "0.2"))
 )
+DOCKER_COMPOSE_CANDIDATE_PROFILE = os.getenv(
+    "DOCKER_COMPOSE_CANDIDATE_PROFILE",
+    "candidate",
+)
+CANDIDATE_SERVICE_NAME = os.getenv("CANDIDATE_SERVICE_NAME", "fastapi-candidate")
+CANDIDATE_CONTAINER_NAME = os.getenv(
+    "CANDIDATE_CONTAINER_NAME",
+    "tcb-fastapi-candidate",
+)
 
 MODELS_ROOT = REPO_ROOT / "models"
 VERSIONS_DIR = MODELS_ROOT / "versions"
@@ -247,6 +256,79 @@ def _write_canary_split_config(candidate_percentage: int) -> None:
     )
 
 
+def _run_command(
+    command: list[str],
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(
+            "Command failed: "
+            + " ".join(command)
+            + " | "
+            + (result.stderr.strip() or result.stdout.strip() or "unknown error")
+        )
+    return result
+
+
+def _run_compose(
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        "docker",
+        "compose",
+        "--profile",
+        DOCKER_COMPOSE_CANDIDATE_PROFILE,
+        *args,
+    ]
+    return _run_command(command, check=check)
+
+
+def candidate_manifest_exists() -> bool:
+    return _manifest_path(CANDIDATE_DIR).exists()
+
+
+def is_candidate_service_running() -> bool:
+    result = _run_command(
+        ["docker", "inspect", "-f", "{{.State.Running}}", CANDIDATE_CONTAINER_NAME],
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def ensure_candidate_service_running() -> None:
+    if not candidate_manifest_exists():
+        raise FileNotFoundError(
+            f"Candidate manifest not found at {_manifest_path(CANDIDATE_DIR)}"
+        )
+
+    if is_candidate_service_running():
+        return
+
+    logger.info("Starting candidate service | service=%s", CANDIDATE_SERVICE_NAME)
+    _run_compose("up", "-d", CANDIDATE_SERVICE_NAME)
+    wait_for_http_ready(f"{CANDIDATE_URL}/health")
+
+
+def stop_candidate_service() -> None:
+    _run_compose("stop", CANDIDATE_SERVICE_NAME, check=False)
+    _run_compose("rm", "-f", CANDIDATE_SERVICE_NAME, check=False)
+
+
+def clear_candidate_slot(*, stop_service: bool = True) -> None:
+    _reset_model_artifacts(CANDIDATE_DIR)
+    if stop_service:
+        stop_candidate_service()
+
+
 def bootstrap_runtime_layout() -> None:
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
     CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -296,6 +378,10 @@ def reload_loadbalancer() -> None:
 def set_canary_percentage(candidate_percentage: int, *, reload: bool = True) -> dict[str, Any]:
     bootstrap_runtime_layout()
     resolved_percentage = max(0, min(100, int(candidate_percentage)))
+    if resolved_percentage > 0:
+        if read_manifest(CANDIDATE_DIR) is None:
+            raise RuntimeError("No candidate model is staged for rollout.")
+        ensure_candidate_service_running()
     _write_canary_split_config(resolved_percentage)
     if reload:
         reload_loadbalancer()
@@ -700,6 +786,7 @@ def stage_candidate_model(
         source_model_dir=source_model_dir,
         metrics_summary=collect_model_summary(CANDIDATE_DIR),
     )
+    ensure_candidate_service_running()
     wait_for_model_version(CANDIDATE_URL, model_id)
     state = set_canary_percentage(initial_percentage)
     logger.info(
@@ -733,7 +820,9 @@ def promote_candidate_to_stable() -> dict[str, Any]:
         extra={"promoted_at": _utc_now()},
     )
     wait_for_model_version(STABLE_URL, candidate_model_id)
-    state = set_canary_percentage(0)
+    set_canary_percentage(0)
+    clear_candidate_slot(stop_service=True)
+    state = fetch_rollout_state()
     logger.info("Candidate promoted to stable | model_id=%s", candidate_model_id)
     return state
 

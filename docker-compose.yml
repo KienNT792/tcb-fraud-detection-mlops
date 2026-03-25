@@ -41,6 +41,8 @@ services:
   fastapi-candidate:
     <<: *fastapi-base
     container_name: tcb-fastapi-candidate
+    profiles:
+      - candidate
     environment:
       MODELS_DIR: /app/models/deployments/candidate
       PROCESSED_DIR: /app/data/processed
@@ -62,8 +64,6 @@ services:
       - ./monitoring/loadbalancer/canary_split.conf:/etc/nginx/conf.d/canary_split.conf:ro
     depends_on:
       fastapi-stable:
-        condition: service_started
-      fastapi-candidate:
         condition: service_started
     networks:
       - mlops
@@ -118,12 +118,16 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.14.3
     container_name: tcb-mlflow
+    entrypoint: /bin/sh
     command: >
-      mlflow server
+      -c "
+      python -m pip install --no-cache-dir boto3 &&
+      exec mlflow server
       --host 0.0.0.0
       --port 5000
       --backend-store-uri sqlite:///mlflow.db
       --artifacts-destination s3://${MINIO_BUCKET}
+      "
     environment:
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
@@ -208,7 +212,6 @@ services:
       - ./volumes/prometheus:/prometheus
     depends_on:
       - fastapi-stable
-      - fastapi-candidate
       - nginx-exporter
       - node-exporter
       - cadvisor
