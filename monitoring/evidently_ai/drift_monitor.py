@@ -197,6 +197,10 @@ class DriftMonitor:
             )
 
         if current_df.empty:
+            feature_scores = {
+                col: 0.0
+                for col in reference_df.columns.tolist()
+            }
             return DriftSnapshot(
                 ready=False,
                 reference_mode=self._reference_mode(),
@@ -204,16 +208,23 @@ class DriftMonitor:
                 current_samples=0,
                 features_total=len(reference_df.columns),
                 reason="waiting_for_current_window",
+                feature_scores=feature_scores,
             )
 
         feature_cols = [col for col in reference_df.columns if col in current_df.columns]
         if not feature_cols:
+            feature_scores = {
+                col: 0.0
+                for col in reference_df.columns.tolist()
+            }
             return DriftSnapshot(
                 ready=False,
                 reference_mode=self._reference_mode(),
                 reference_samples=len(reference_df),
                 current_samples=len(current_df),
+                features_total=len(reference_df.columns),
                 reason="feature_overlap_missing",
+                feature_scores=feature_scores,
             )
 
         reference_numeric = reference_df[feature_cols].copy()

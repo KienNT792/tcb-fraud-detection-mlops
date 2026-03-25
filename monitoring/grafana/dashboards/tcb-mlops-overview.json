@@ -191,7 +191,7 @@
       "id": 9,
       "options": {"displayMode": "gradient", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true},
       "targets": [
-        {"expr": "topk(10, max by (feature) (tcb_drift_feature_score))", "legendFormat": "{{feature}}", "refId": "A"}
+        {"expr": "topk(10, max by (feature) (last_over_time(tcb_drift_feature_score[$__range])))", "legendFormat": "{{feature}}", "refId": "A"}
       ],
       "title": "Top Drifted Features",
       "type": "bargauge"
