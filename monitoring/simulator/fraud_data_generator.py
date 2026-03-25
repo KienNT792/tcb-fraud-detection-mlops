@@ -6,6 +6,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+# Must mirror preprocess.py _YN_MAP and _STATUS_MAP exactly
+_YN_MAP: dict[str, int] = {"Y": 1, "N": 0, "N/A": 0}
+_STATUS_MAP: dict[str, int] = {"APPROVED": 1, "DECLINED": 0}
+
 
 class FraudDataGenerator:
     def __init__(
@@ -82,9 +86,11 @@ class FraudDataGenerator:
             "os": row.get("os"),
             "ip_country": row.get("ip_country"),
             "distance_from_home_km": self._to_float(row.get("distance_from_home_km"), 0.0),
-            "cvv_match": row.get("cvv_match"),
-            "is_3d_secure": row.get("is_3d_secure"),
-            "transaction_status": row.get("transaction_status"),
+            # These 3 fields are encoded at train time by preprocess.clean_data().
+            # Simulator MUST send integers, not raw strings, to match model input.
+            "cvv_match": _YN_MAP.get(str(row.get("cvv_match", "N")), 0),
+            "is_3d_secure": _YN_MAP.get(str(row.get("is_3d_secure", "N")), 0),
+            "transaction_status": _STATUS_MAP.get(str(row.get("transaction_status", "APPROVED")), 1),
             "tx_count_last_1h": self._to_int(row.get("tx_count_last_1h"), 0),
             "tx_count_last_24h": self._to_int(row.get("tx_count_last_24h"), 1),
             "time_since_last_tx_min": self._to_float(row.get("time_since_last_tx_min"), 30.0),
@@ -106,7 +112,7 @@ class FraudDataGenerator:
         if self.random.random() < risk_bias:
             payload["merchant_country"] = self.random.choice(["SG", "US", "JP"])
             payload["ip_country"] = self.random.choice(["SG", "US", "JP"])
-            payload["transaction_status"] = "APPROVED"
+            payload["transaction_status"] = 1  # APPROVED encoded as int
             payload["distance_from_home_km"] = round(
                 payload["distance_from_home_km"] + self.random.uniform(20.0, 300.0),
                 2,
