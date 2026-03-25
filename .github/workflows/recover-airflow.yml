@@ -27,8 +27,8 @@ jobs:
       DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
       DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'tcb-fraud-detection-mlops' }}
-      DEPLOY_REF: ${{ inputs.deploy_ref }}
-      RESET_DB: ${{ inputs.reset_db }}
+      DEPLOY_REF: ${{ github.event.inputs.deploy_ref || 'main' }}
+      RESET_DB: ${{ github.event.inputs.reset_db || 'true' }}
     steps:
       - name: Validate recovery configuration
         run: |
