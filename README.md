@@ -947,6 +947,14 @@ The traffic simulator framework enables realistic load testing, drift injection,
 ### Running Simulations
 
 ```bash
+# One-command simulator for local or VPS runs
+./scripts/run_simulator.sh
+
+# Same script against the live VPS
+./scripts/run_simulator.sh \
+  --base-url http://35.222.198.13/ \
+  --prometheus-url http://35.222.198.13:9090
+
 # Run baseline simulation (100 requests at 2 RPS)
 python -m monitoring.simulator.scenarios.baseline_5rps
 
@@ -956,6 +964,8 @@ python -m monitoring.simulator.scenarios.feature_drift_5rps
 # Full cycle: drift injection → alert trigger → auto-rollback
 python -m monitoring.simulator.scenarios.full_cycle_drift_to_rollout
 ```
+
+Detailed guide: [`monitoring/simulator/RUN.md`](monitoring/simulator/RUN.md)
 
 ### Pre-built Scenarios
 

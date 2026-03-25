@@ -55,4 +55,5 @@ scripts/build_modelv2_bundle.py
 Thumbs.db
 .idea/
 .vscode/
+.codex/
 docs/architecture_blueprint.md
