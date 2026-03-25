@@ -21,11 +21,13 @@ htmlcov/
 
 data/
 artifacts/
+mlruns/
 ml_pipeline/mlruns/
 .mlflow/
 .env
 .env.*
 !.env.example
+env.b64
 *.pem
 *.key
 *.crt
@@ -42,9 +44,12 @@ build/
 dist/
 *.egg-info/
 .eggs/
+modelv2/
+scripts/build_modelv2_bundle.py
 
 # IDE / OS clutter
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+docs/architecture_blueprint.md
