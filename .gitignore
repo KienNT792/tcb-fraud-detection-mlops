@@ -34,6 +34,7 @@ env.b64
 *.p12
 
 volumes/
+monitoring/prometheus/file_sd/*.json
 airflow_logs/
 prometheus_data/
 grafana_data/

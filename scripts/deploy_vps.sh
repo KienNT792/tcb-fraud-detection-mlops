@@ -33,6 +33,47 @@ candidate_service_enabled() {
   [[ -f "$(candidate_manifest_path)" ]]
 }
 
+prometheus_candidate_target_path() {
+  printf '%s\n' "$DEPLOY_PATH/monitoring/prometheus/file_sd/candidate.json"
+}
+
+ensure_prometheus_runtime_layout() {
+  mkdir -p "$DEPLOY_PATH/monitoring/prometheus/file_sd"
+  if [[ ! -f "$(prometheus_candidate_target_path)" ]]; then
+    printf '[]\n' > "$(prometheus_candidate_target_path)"
+  fi
+}
+
+write_candidate_scrape_targets() {
+  local mode="${1:-disabled}"
+  local target_path=""
+  target_path="$(prometheus_candidate_target_path)"
+  ensure_prometheus_runtime_layout
+
+  if [[ "$mode" == "enabled" ]]; then
+    cat > "$target_path" <<'EOF'
+[
+  {
+    "targets": ["fastapi-candidate:8000"]
+  }
+]
+EOF
+    return
+  fi
+
+  printf '[]\n' > "$target_path"
+}
+
+repair_prometheus_storage_permissions() {
+  local prometheus_data_dir="$DEPLOY_PATH/volumes/prometheus"
+  mkdir -p "$prometheus_data_dir"
+  docker run --rm \
+    -u root \
+    -v "$prometheus_data_dir:/prometheus" \
+    alpine:3.20 \
+    sh -c 'chown -R 65534:65534 /prometheus && chmod -R u+rwX /prometheus'
+}
+
 compose_stack() {
   local -a profile_args=()
   if candidate_service_enabled; then
@@ -190,6 +231,7 @@ prune_disabled_candidate_service() {
     return 0
   fi
 
+  write_candidate_scrape_targets disabled
   IMAGE_TAG="$IMAGE_TAG" docker compose --profile candidate stop fastapi-candidate >/dev/null 2>&1 || true
   IMAGE_TAG="$IMAGE_TAG" docker compose --profile candidate rm -f fastapi-candidate >/dev/null 2>&1 || true
 }
@@ -386,6 +428,9 @@ if [[ -z "${DOCKERHUB_TOKEN:-}" ]]; then
   exit 1
 fi
 
+ensure_prometheus_runtime_layout
+write_candidate_scrape_targets disabled
+
 compose_stack config >/dev/null
 
 printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
@@ -394,6 +439,7 @@ echo "Pulling application image: ${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 docker pull "${APP_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
 compose_stack pull
+repair_prometheus_storage_permissions
 compose_stack up -d minio minio-init mlflow
 
 wait_for_endpoint "mlflow" "http://127.0.0.1:${MLFLOW_PORT:-5000}" 24 5
@@ -512,5 +558,11 @@ for check in "${HEALTH_CHECKS[@]}"; do
     sleep "$sleep_seconds"
   done
 done
+
+if candidate_service_enabled; then
+  write_candidate_scrape_targets enabled
+else
+  write_candidate_scrape_targets disabled
+fi
 
 echo "Deploy completed successfully."

@@ -17,8 +17,9 @@ scrape_configs:
 
   - job_name: fastapi-candidate
     metrics_path: /metrics
-    static_configs:
-      - targets: ["fastapi-candidate:8000"]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/candidate.json
 
   - job_name: loadbalancer
     static_configs:

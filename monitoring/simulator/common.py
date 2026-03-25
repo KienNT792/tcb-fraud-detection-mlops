@@ -71,6 +71,12 @@ CANDIDATE_CONTAINER_NAME = os.getenv(
     "CANDIDATE_CONTAINER_NAME",
     "tcb-fastapi-candidate",
 )
+PROMETHEUS_FILE_SD_DIR = REPO_ROOT / "monitoring" / "prometheus" / "file_sd"
+PROMETHEUS_CANDIDATE_TARGET_FILE = PROMETHEUS_FILE_SD_DIR / "candidate.json"
+PROMETHEUS_CANDIDATE_SCRAPE_TARGET = os.getenv(
+    "PROMETHEUS_CANDIDATE_SCRAPE_TARGET",
+    "fastapi-candidate:8000",
+)
 
 MODELS_ROOT = REPO_ROOT / "models"
 VERSIONS_DIR = MODELS_ROOT / "versions"
@@ -137,16 +143,33 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.load(fh)
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, sort_keys=False)
+        fh.write("\n")
     tmp_path.replace(path)
 
 
 def _manifest_path(model_dir: Path) -> Path:
     return model_dir / MANIFEST_FILENAME
+
+
+def ensure_prometheus_scrape_layout() -> None:
+    PROMETHEUS_FILE_SD_DIR.mkdir(parents=True, exist_ok=True)
+    if not PROMETHEUS_CANDIDATE_TARGET_FILE.exists():
+        _write_json(PROMETHEUS_CANDIDATE_TARGET_FILE, [])
+
+
+def set_candidate_scrape_target(enabled: bool) -> None:
+    ensure_prometheus_scrape_layout()
+    payload: list[dict[str, Any]]
+    if enabled:
+        payload = [{"targets": [PROMETHEUS_CANDIDATE_SCRAPE_TARGET]}]
+    else:
+        payload = []
+    _write_json(PROMETHEUS_CANDIDATE_TARGET_FILE, payload)
 
 
 def read_manifest(model_dir: Path) -> dict[str, Any] | None:
@@ -472,20 +495,24 @@ def ensure_candidate_service_running() -> None:
         )
 
     if is_candidate_service_running():
+        set_candidate_scrape_target(True)
         return
 
     logger.info("Starting candidate service | service=%s", CANDIDATE_SERVICE_NAME)
     _run_compose("up", "-d", CANDIDATE_SERVICE_NAME)
     wait_for_http_ready(f"{CANDIDATE_URL}/health")
+    set_candidate_scrape_target(True)
 
 
 def stop_candidate_service() -> None:
+    set_candidate_scrape_target(False)
     _run_compose("stop", CANDIDATE_SERVICE_NAME, check=False)
     _run_compose("rm", "-f", CANDIDATE_SERVICE_NAME, check=False)
 
 
 def clear_candidate_slot(*, stop_service: bool = True) -> None:
     _reset_runtime_bundle(CANDIDATE_DIR, processed_dir=CANDIDATE_PROCESSED_DIR)
+    set_candidate_scrape_target(False)
     if stop_service:
         stop_candidate_service()
 
@@ -493,6 +520,7 @@ def clear_candidate_slot(*, stop_service: bool = True) -> None:
 def bootstrap_runtime_layout() -> None:
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
     CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_prometheus_scrape_layout()
 
     if (MODELS_ROOT / MODEL_FILENAME).exists() and read_manifest(MODELS_ROOT) is None:
         write_manifest(
