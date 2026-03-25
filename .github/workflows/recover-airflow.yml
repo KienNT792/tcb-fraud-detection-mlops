@@ -1,0 +1,98 @@
+name: Recover Airflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset_db:
+        description: Reset Airflow standalone SQLite metadata database before restart
+        required: true
+        default: true
+        type: boolean
+      deploy_ref:
+        description: Branch to sync on VPS before restarting Airflow
+        required: true
+        default: main
+        type: string
+
+jobs:
+  recover-airflow:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'tcb-fraud-detection-mlops' }}
+      DEPLOY_REF: ${{ inputs.deploy_ref }}
+      RESET_DB: ${{ inputs.reset_db }}
+    steps:
+      - name: Validate recovery configuration
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_HOST}" ]; then
+            echo "Missing deploy host. Set GCP_DEPLOY_HOST in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_USER}" ]; then
+            echo "Missing deploy user. Set GCP_DEPLOY_USER in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_SSH_KEY}" ]; then
+            echo "Missing SSH key. Set SSH_DEPLOY_KEY in GitHub Secrets."
+            exit 1
+          fi
+
+      - name: Recover Airflow on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_PATH,DEPLOY_REF,RESET_DB
+          script: |
+            set -euo pipefail
+
+            if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
+              DEPLOY_PATH="$HOME/$DEPLOY_PATH"
+            fi
+
+            cd "${DEPLOY_PATH}"
+            git fetch --all --prune
+            git checkout "${DEPLOY_REF}"
+            git pull --ff-only origin "${DEPLOY_REF}"
+
+            echo "Disk usage before recovery:"
+            df -h
+            echo "Airflow volume usage:"
+            du -sh volumes/airflow/* 2>/dev/null | sort -h || true
+
+            docker compose stop airflow || true
+            docker compose rm -f airflow || true
+
+            if [ "${RESET_DB}" = "true" ]; then
+              ts="$(date +%F-%H%M%S)"
+              if [ -f volumes/airflow/airflow.db ]; then
+                mv volumes/airflow/airflow.db "volumes/airflow/airflow.db.bak.${ts}"
+              fi
+              rm -f volumes/airflow/airflow.db-wal volumes/airflow/airflow.db-shm
+            fi
+
+            docker compose up -d --force-recreate airflow
+
+            echo "Waiting for Airflow health endpoint..."
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error http://localhost:8080/health >/dev/null 2>&1; then
+                echo "Airflow is healthy."
+                docker compose ps airflow
+                exit 0
+              fi
+              sleep 10
+            done
+
+            echo "Airflow did not become healthy."
+            docker compose ps airflow || true
+            docker compose logs --tail=200 airflow || true
+            exit 1
