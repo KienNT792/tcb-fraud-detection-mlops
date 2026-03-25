@@ -1,0 +1,6 @@
+# Development/Testing extras (NOT installed in the production Docker image)
+# Install via: pip install -r serving_api/requirements.txt -r serving_api/requirements-dev.txt
+-r requirements.txt
+pytest==8.2.2
+pytest-cov==5.0.0
+httpx==0.27.0     # required by FastAPI TestClient

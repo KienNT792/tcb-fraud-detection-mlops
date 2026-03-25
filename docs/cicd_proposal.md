@@ -4,7 +4,7 @@ Tài liệu mô tả luồng CI/CD sử dụng **GitHub Actions** để đóng g
 
 ## 1. Thành phần chính
 
-- **GitHub Actions**: điều phối CI/CD, trigger tự động khi push/PR.
+- **GitHub Actions**: điều phối CD tự động khi push và CI chạy tay khi cần.
 - **Airflow**: lập lịch pipeline `check_model_quality >> preprocess >> train >> evaluate >> stage_candidate >> verify_candidate`.
 - **MLflow**: quản lý experiment, metric, artifact và version model.
 - **MinIO**: object storage nội bộ cho artifact, model và dữ liệu đã xử lý.
@@ -15,7 +15,7 @@ Tài liệu mô tả luồng CI/CD sử dụng **GitHub Actions** để đóng g
 
 ## 2. Luồng CI
 
-Khi developer push code hoặc tạo PR:
+Hiện tại CI được giữ ở chế độ `workflow_dispatch` để có thể chạy tay khi cần xác minh lại chất lượng trước hoặc sau deploy:
 
 1. GitHub Actions checkout source code.
 2. Setup Python 3.10, cài dependency cho `ml_pipeline` và `serving_api`.
@@ -24,22 +24,29 @@ Khi developer push code hoặc tạo PR:
    - `ml_pipeline/tests/test_preprocess.py` (preprocessing)
    - `ml_pipeline/tests/test_model.py` (train + evaluate + inference)
    - `serving_api/tests/` (API endpoints + model loader)
-5. Build Docker image `tcb-fraud-fastapi:<sha>`.
+5. CI manual không build/push Docker image; phần này được chuyển sang CD workflow.
 
 ## 3. Luồng CD
 
-Sau khi CI thành công (chỉ trên branch `main` hoặc `dev/ver2`):
+CD hiện auto chạy trực tiếp khi push lên branch `main` hoặc `dev/ver2`:
 
-1. GitHub Actions SSH vào Google Cloud VPS.
-2. VPS cập nhật source code từ branch đích.
-3. Chạy `docker compose up -d --build` để cập nhật các service:
+1. GitHub Actions build và push Docker image `tungb12ok/tcb-detect-credit:<sha>` lên Docker Hub.
+2. GitHub Actions SSH vào Google Cloud VPS.
+3. Nếu `DEPLOY_PATH` chưa có repo, workflow sẽ tự `git clone` branch đích vào VPS.
+4. VPS chạy script `scripts/deploy_vps.sh` để:
+   - `git pull`
+   - đồng bộ `.env` từ `DEPLOY_ENV_B64` nếu secret này được cấu hình
+   - `docker login`
+   - `docker compose pull`
+   - `docker compose up -d --no-build --remove-orphans`
+   - health check
    - FastAPI Stable + Candidate
    - Nginx Load Balancer
    - MLflow server
    - MinIO
    - Airflow
    - Prometheus + Grafana
-4. Health check sau deploy với các endpoint:
+5. Health check sau deploy với các endpoint:
    - `http://localhost:${FASTAPI_PORT}/health`
    - `http://localhost:${MLFLOW_PORT}`
    - `http://localhost:${AIRFLOW_PORT}/health`
@@ -61,7 +68,8 @@ Sau khi CI thành công (chỉ trên branch `main` hoặc `dev/ver2`):
 
 ## 5. Mapping Với Repo Hiện Tại
 
-- `.github/workflows/ci-cd-pipeline.yml`: pipeline CI/CD chính.
+- `.github/workflows/ci-cd-pipeline.yml`: pipeline CD chính.
+- `.github/workflows/ci-manual.yml`: pipeline CI chạy tay khi cần.
 - `docker-compose.yml`: stack deployment trên VPS.
 - `serving_api/Dockerfile`: Docker build đa giai đoạn từ repo root.
 - `serving_api/app/main.py`: bổ sung `/metrics` cho Prometheus.
@@ -91,7 +99,11 @@ Tạo file `.env` từ `.env.example` và cập nhật các giá trị tối thi
 
 GitHub Actions cần cấu hình Secrets:
 
-- `GCP_DEPLOY_HOST` — IP của GCP VPS
-- `GCP_DEPLOY_USER` — SSH username (vd: `ubuntu`)
-- `GCP_SSH_PRIVATE_KEY` — SSH private key
-- `GIT_REPO_URL` — URL clone repo
+- `GCP_DEPLOY_HOST` — IP của GCP VPS, có thể để ở Secrets hoặc Variables
+- `GCP_DEPLOY_USER` — SSH username (vd: `ubuntu`), có thể để ở Secrets hoặc Variables
+- `DEPLOY_PATH` — thư mục deploy trên VPS, có thể để ở Secrets hoặc Variables
+- `SSH_DEPLOY_KEY` — SSH private key dùng để Actions SSH vào VPS
+- `DOCKERHUB_TOKEN` — Docker Hub access token dùng để push image và pull trên VPS
+- `DEPLOY_ENV_B64` — nội dung file `.env` production đã được base64-encode để CD đồng bộ thẳng xuống VPS
+
+Tham khảo thêm hướng dẫn chuẩn bị VPS và cài public key tại `docs/cloud_ssh_setup.md`.

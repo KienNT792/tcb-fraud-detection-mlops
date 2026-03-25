@@ -68,11 +68,6 @@ from xgboost import XGBClassifier
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -259,7 +254,7 @@ class FraudDetector:
         """
         required_files = {
             "model":            self._models_dir / "xgb_fraud_model.joblib",
-            "evaluation":       self._models_dir / "evaluation" / "evaluation.json",
+            "metrics":          self._models_dir / "metrics.json",
             "features":         self._processed_dir / "features.json",
             "customer_stats":   self._processed_dir / "customer_stats.parquet",
             "segment_label_map":self._processed_dir / "segment_label_map.json",
@@ -280,10 +275,23 @@ class FraudDetector:
         with open(required_files["features"], encoding="utf-8") as fh:
             feature_cols: list[str] = json.load(fh)["features"]
 
-        # Optimal threshold from evaluation run
-        with open(required_files["evaluation"], encoding="utf-8") as fh:
-            eval_data = json.load(fh)
-        threshold: float = float(eval_data["threshold_metrics"]["threshold"])
+        with open(required_files["metrics"], encoding="utf-8") as fh:
+            metrics_data = json.load(fh)
+
+        eval_path = self._models_dir / "evaluation" / "evaluation.json"
+        if eval_path.exists():
+            with open(eval_path, encoding="utf-8") as fh:
+                eval_data = json.load(fh)
+            threshold: float = float(
+                eval_data["threshold_metrics"]["threshold"]
+            )
+        else:
+            threshold = float(metrics_data["threshold"])
+            logger.warning(
+                "evaluation/evaluation.json not found in %s; "
+                "falling back to metrics.json threshold.",
+                self._models_dir,
+            )
 
         # Feature state — mirrors fit_feature_generators() output
         customer_stats = pd.read_parquet(required_files["customer_stats"])
@@ -590,6 +598,9 @@ def _smoke_test(models_dir: str, processed_dir: str) -> None:
 
 
 if __name__ == "__main__":
+    from ml_pipeline.src.logging_config import setup_logging
+    setup_logging()
+
     project_root = Path(__file__).resolve().parent.parent.parent
     _models    = str(project_root / "models")
     _processed = str(project_root / "data" / "processed")

@@ -151,7 +151,7 @@ tcb-fraud-detection-mlops/
 │   ├── architecture.drawio         #   Editable architecture diagram
 │   └── cicd_proposal.md            #   Deployment flow + environment setup guide
 │
-├── .github/workflows/              #   GitHub Actions CI/CD (lint + test + build + deploy)
+├── .github/workflows/              #   GitHub Actions CD auto-deploy + CI manual
 ├── docker-compose.yml              #   8 services: fastapi, mlflow, minio, airflow,
 │                                   #   prometheus, grafana, node-exporter, cadvisor
 ├── .env.example                    #   All required environment variables with defaults
@@ -436,7 +436,7 @@ docker compose up -d
 
 | Service | Image | Port | Purpose |
 |---|---|---|---|
-| **fastapi** | `tcb-fraud-fastapi` | `8000` | Fraud prediction REST API |
+| **fastapi** | `tungb12ok/tcb-detect-credit` | `8000` | Fraud prediction REST API |
 | **mlflow** | `ghcr.io/mlflow/mlflow:v2.14.3` | `5000` | Experiment tracking UI |
 | **minio** | `minio/minio` | `9000` (API), `9001` (Console) | S3-compatible artifact store |
 | **airflow** | `apache/airflow:2.10.3-python3.10` | `8080` | DAG orchestration UI |
@@ -669,11 +669,11 @@ Gate result (`PASS` / `FAIL`) is saved in `evaluation.json` and tagged in MLflow
 
 ## 🚢 CI/CD Pipeline
 
-### GitHub Actions (`.github/workflows/ci-cd-pipeline.yml`)
+### CD Workflow (`.github/workflows/ci-cd-pipeline.yml`)
 
-Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requests**:
+CD is currently the only workflow that auto-runs on **push to `main` / `dev/ver2`**. CI has been moved to manual trigger temporarily.
 
-#### CI Job (runs on every push/PR)
+#### Manual CI (`.github/workflows/ci-manual.yml`)
 
 | Stage | Description |
 |---|---|
@@ -684,16 +684,19 @@ Full CI/CD pipeline triggered on **push to `main` / `dev/ver2`** and **pull requ
 | **Test Preprocessing** | `pytest test_preprocess.py --cov-fail-under=80` |
 | **Test Model Pipeline** | `pytest test_model.py --cov-fail-under=80` (train + evaluate + inference) |
 | **Test Serving API** | `pytest serving_api/tests --cov-fail-under=80` |
-| **Build Docker Image** | `docker build --file serving_api/Dockerfile` → tag `tcb-fraud-fastapi:<sha>` |
+| **Build Docker Image** | Not part of manual CI; handled by CD workflow |
 
-#### CD Job (only on push to `main` / `dev/ver2`)
+#### Auto CD (push to `main` / `dev/ver2`)
 
 | Stage | Description |
 |---|---|
-| **Deploy to GCP VPS** | SSH → `git pull` → `docker compose up -d --build` |
+| **Build & Push Image** | Build and push `tungb12ok/tcb-detect-credit:<sha>` to Docker Hub |
+| **Bootstrap Repo on VPS** | Clone repo automatically if `DEPLOY_PATH` does not exist yet |
+| **Sync Runtime Config** | Decode `DEPLOY_ENV_B64` into `.env` when provided, otherwise reuse existing config |
+| **Deploy to GCP VPS** | SSH → run [`scripts/deploy_vps.sh`](/workspaces/tcb-fraud-detection-mlops/scripts/deploy_vps.sh) |
 | **Health Checks** | Poll FastAPI, MLflow, Airflow, Grafana — up to 10 retries × 10s |
 
-Secrets required: `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, `GCP_SSH_PRIVATE_KEY`, `GIT_REPO_URL`.
+Required config: `SSH_DEPLOY_KEY`, `DOCKERHUB_TOKEN`, and optional `DEPLOY_ENV_B64` in GitHub Secrets, plus `GCP_DEPLOY_HOST`, `GCP_DEPLOY_USER`, and optional `DEPLOY_PATH` in either Secrets or Variables. `DEPLOY_ENV_B64` should be the base64-encoded contents of the production `.env` file. On the VPS, [`scripts/deploy_vps.sh`](/workspaces/tcb-fraud-detection-mlops/scripts/deploy_vps.sh) can still fall back to `~/.tcb_deploy_env` for Docker Hub credentials when needed.
 
 ---
 
@@ -768,7 +771,7 @@ pytest serving_api/tests/ --cov=serving_api.app --cov-report=term-missing --cov-
 | Metrics Collection | Prometheus, prometheus-client | — , 0.21.0 |
 | Dashboarding | Grafana | 12.4.1 |
 | Orchestration | Apache Airflow | 2.10.3-python3.10 |
-| CI/CD | GitHub Actions | CI + CD (deploy to GCP VPS) |
+| CI/CD | GitHub Actions | Auto CD + manual CI |
 | Testing | pytest, pytest-cov | 8.2.2, 5.0.0 |
 | HTTP Testing | httpx (FastAPI TestClient) | 0.27.0 |
 | Linting | flake8 | — |

@@ -36,11 +36,6 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -676,6 +671,9 @@ def run_preprocessing(
 
 
 if __name__ == "__main__":
+    from ml_pipeline.src.logging_config import setup_logging
+    setup_logging()
+
     project_root = Path(__file__).resolve().parent.parent.parent
     _data_path = str(project_root / "data" / "raw" / "tcb_credit_fraud_dataset.csv")
     _output_dir = str(project_root / "data" / "processed")

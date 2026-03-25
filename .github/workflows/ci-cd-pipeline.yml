@@ -2,22 +2,46 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - ".gitignore"
   pull_request:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - ".gitignore"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# ---------------------------------------------------------------------------
-# CI — Lint, Test(coverage >80%), Docker Build
-# ---------------------------------------------------------------------------
 jobs:
-  ci:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Lint
+        run: flake8 ml_pipeline/src serving_api/app dags
+
+  test:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      MLFLOW_TRACKING_URI: "file:///tmp/mlruns"
 
     steps:
       - name: Checkout source
@@ -26,130 +50,131 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest pytest-cov
-          pip install -r ml_pipeline/requirements.txt -r serving_api/requirements.txt
+          pip install -r ml_pipeline/requirements.txt -r serving_api/requirements-dev.txt
 
-      - name: Lint
-        run: flake8 ml_pipeline/src serving_api/app dags
-
-      - name: Test preprocessing module with coverage gate
+      - name: Run tests with coverage gate
         run: |
           pytest ml_pipeline/tests/test_preprocess.py \
-            --cov=ml_pipeline.src.preprocess \
+                 ml_pipeline/tests/test_model.py \
+                 ml_pipeline/tests/test_coverage.py \
+                 serving_api/tests \
+            --cov=ml_pipeline.src \
+            --cov=serving_api.app \
             --cov-report=term-missing \
-            --cov-fail-under=80
+            --cov-fail-under=80 \
+            -x
 
-      - name: Test model pipeline with coverage gate
-        run: |
-          pytest ml_pipeline/tests/test_model.py \
-            --cov=ml_pipeline.src.train \
-            --cov=ml_pipeline.src.evaluate \
-            --cov=ml_pipeline.src.inference \
-            --cov-report=term-missing \
-            --cov-fail-under=80
-
-      - name: Test serving API with coverage gate
-        run: |
-          pytest serving_api/tests \
-            --cov=serving_api.app.main \
-            --cov=serving_api.app.model_loader \
-            --cov-report=term-missing \
-            --cov-fail-under=80
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            --file serving_api/Dockerfile \
-            --tag tcb-fraud-fastapi:${{ github.sha }} \
-            .
-
-  # ---------------------------------------------------------------------------
-  # CD — Deploy to Google Cloud VPS (only on push to main or dev/ver2)
-  # ---------------------------------------------------------------------------
-  deploy:
-    needs: ci
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev/ver2')
+  docker:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    environment: production
-
     env:
-      DEPLOY_PATH: /opt/tcb-fraud-detection-mlops
-      DEPLOY_REF: ${{ github.ref_name }}
-      IMAGE_TAG: ${{ github.ref_name }}-${{ github.run_number }}
+      IMAGE_REPOSITORY: tungb12ok/tcb-detect-credit
 
     steps:
-      - name: Deploy to Google Cloud VPS
-        uses: appleboy/ssh-action@v1
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
         with:
-          host: ${{ secrets.GCP_DEPLOY_HOST }}
-          username: ${{ secrets.GCP_DEPLOY_USER }}
-          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG
+          username: ${{ vars.DOCKERHUB_USERNAME || 'tungb12ok' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: serving_api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPOSITORY }}:${{ github.sha }}
+            ${{ env.IMAGE_REPOSITORY }}:${{ github.ref_name }}-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs:
+      - lint
+      - test
+      - docker
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'tcb-fraud-detection-mlops' }}
+      DEPLOY_REF: ${{ github.ref_name }}
+      IMAGE_TAG: ${{ github.sha }}
+      GIT_REMOTE_URL: ${{ github.server_url }}/${{ github.repository }}.git
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'tungb12ok' }}
+      DEPLOY_ENV_B64: ${{ secrets.DEPLOY_ENV_B64 || vars.DEPLOY_ENV_B64 || '' }}
+
+    steps:
+      - name: Validate deploy configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_HOST}" ]; then
+            echo "Missing deploy host. Set GCP_DEPLOY_HOST in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_USER}" ]; then
+            echo "Missing deploy user. Set GCP_DEPLOY_USER in GitHub Secrets or Variables."
+            exit 1
+          fi
+
+          if [ -z "${DEPLOY_SSH_KEY}" ]; then
+            echo "Missing SSH key. Set SSH_DEPLOY_KEY in GitHub Secrets."
+            exit 1
+          fi
+
+          if [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "Missing DOCKERHUB_TOKEN. Set it in GitHub Secrets."
+            exit 1
+          fi
+
+          echo "Deploy configuration looks present."
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        with:
+          host: ${{ secrets.GCP_DEPLOY_HOST || vars.GCP_DEPLOY_HOST }}
+          username: ${{ secrets.GCP_DEPLOY_USER || vars.GCP_DEPLOY_USER }}
+          key: ${{ secrets.SSH_DEPLOY_KEY }}
+          envs: DEPLOY_PATH,DEPLOY_REF,IMAGE_TAG,GIT_REMOTE_URL,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,DEPLOY_ENV_B64
           script: |
             set -euo pipefail
 
-            mkdir -p $DEPLOY_PATH
-            cd $DEPLOY_PATH
-
-            # Clone repo nếu chưa có, hoặc fetch + pull
-            if [ ! -d .git ]; then
-              git clone ${{ secrets.GIT_REPO_URL }} .
+            if [ "${DEPLOY_PATH#/}" = "$DEPLOY_PATH" ]; then
+              DEPLOY_PATH="$HOME/$DEPLOY_PATH"
             fi
 
-            git fetch --all --prune
-            git checkout $DEPLOY_REF
-            git pull origin $DEPLOY_REF
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              if [ -d "$DEPLOY_PATH" ] && [ -n "$(find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+                echo "Deploy path exists but is not a git repository: $DEPLOY_PATH"
+                exit 1
+              fi
 
-            # Tạo .env từ .env.example nếu chưa tồn tại
-            if [ ! -f .env ]; then
-              cp .env.example .env
-              echo "⚠️  Created .env from .env.example — review and update secrets!"
+              mkdir -p "$(dirname "$DEPLOY_PATH")"
+              echo "Bootstrapping repository into $DEPLOY_PATH"
+              git clone --branch "$DEPLOY_REF" --single-branch "$GIT_REMOTE_URL" "$DEPLOY_PATH"
             fi
 
-            # Build và deploy containers
-            IMAGE_TAG=$IMAGE_TAG docker compose up -d --build
-
-      - name: Wait for services to start
-        run: sleep 20
-
-      - name: Health check — FastAPI (Stable)
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.GCP_DEPLOY_HOST }}
-          username: ${{ secrets.GCP_DEPLOY_USER }}
-          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
-          envs: DEPLOY_PATH
-          script: |
-            set -euo pipefail
-            cd $DEPLOY_PATH
-            set -a && . ./.env && set +a
-
-            for endpoint in \
-              "http://localhost:${FASTAPI_PORT:-8000}/health" \
-              "http://localhost:${MLFLOW_PORT:-5000}" \
-              "http://localhost:${AIRFLOW_PORT:-8080}/health" \
-              "http://localhost:${GRAFANA_PORT:-3000}/api/health"; do
-
-              echo "Checking ${endpoint}..."
-              for attempt in $(seq 1 10); do
-                if curl --fail --silent --show-error "$endpoint" > /dev/null 2>&1; then
-                  echo "  ✓ ${endpoint} is healthy"
-                  break
-                fi
-                if [ "$attempt" -eq 10 ]; then
-                  echo "  ✗ ${endpoint} failed after 10 attempts"
-                  exit 1
-                fi
-                sleep 10
-              done
-            done
-
-            echo ""
-            echo "============================================"
-            echo "  All health checks passed!"
-            echo "============================================"
+            cd "$DEPLOY_PATH"
+            bash ./scripts/deploy_vps.sh

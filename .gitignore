@@ -21,6 +21,7 @@ htmlcov/
 
 data/
 artifacts/
+ml_pipeline/mlruns/
 .mlflow/
 .env
 .env.*
@@ -34,6 +35,7 @@ volumes/
 airflow_logs/
 prometheus_data/
 grafana_data/
+.runtime_bundle/
 
 # Build/package outputs
 build/

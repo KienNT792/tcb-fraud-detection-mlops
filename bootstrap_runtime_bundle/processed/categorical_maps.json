@@ -1,0 +1,47 @@
+{
+  "card_type": {
+    "CREDIT": 0,
+    "DEBIT": 1,
+    "VISA": 2,
+    "MASTERCARD": 3
+  },
+  "card_tier": {
+    "EVERYDAY": 0,
+    "GOLD": 1,
+    "PLATINUM": 2,
+    "SPARK": 3
+  },
+  "currency": {
+    "SGD": 0,
+    "USD": 1,
+    "VND": 2
+  },
+  "merchant_category": {
+    "Electronics": 0,
+    "Groceries": 1,
+    "Retail": 2,
+    "Transport": 3,
+    "Travel": 4
+  },
+  "merchant_country": {
+    "SG": 0,
+    "US": 1,
+    "VN": 2
+  },
+  "device_type": {
+    "Desktop": 0,
+    "Mobile": 1,
+    "POS": 2
+  },
+  "os": {
+    "Android": 0,
+    "UNKNOWN": 1,
+    "Windows": 2,
+    "iOS": 3
+  },
+  "ip_country": {
+    "SG": 0,
+    "US": 1,
+    "VN": 2
+  }
+}

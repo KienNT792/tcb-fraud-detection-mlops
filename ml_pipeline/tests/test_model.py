@@ -898,7 +898,6 @@ class TestFraudDetector:
         with pytest.raises(FileNotFoundError):
             FraudDetector(str(tmp_path), str(tmp_path))
 
-
 # ===========================================================================
 # Tests — inference.py: FraudDetector._transform
 # ===========================================================================
@@ -942,3 +941,543 @@ class TestFraudDetectorTransform:
         sample["customer_id"] = "TOTALLY_NEW_CUSTOMER_XYZ_999"
         transformed = detector._transform(sample)
         assert (transformed["customer_tx_count"] == 0).all()
+
+# ===========================================================================
+# Tests — evaluate.py: configure_mlflow
+# ===========================================================================
+
+class TestConfigureMlflow:
+    """Tests for configure_mlflow."""
+
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
+    def test_defaults(self, mock_mlflow: MagicMock) -> None:
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
+
+        with patch.dict(os.environ, {}, clear=True):
+            name = configure_mlflow("train")
+        mock_mlflow.set_experiment.assert_called_once()
+        assert name.startswith("train-")
+
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
+    def test_custom_run_name(self, mock_mlflow: MagicMock) -> None:
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
+
+        env = {"MLFLOW_RUN_NAME": "my-custom-run"}
+        with patch.dict(os.environ, env, clear=True):
+            name = configure_mlflow("eval")
+        assert name == "my-custom-run"
+
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
+    def test_tracking_uri_set(self, mock_mlflow: MagicMock) -> None:
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
+
+        env = {"MLFLOW_TRACKING_URI": "http://localhost:5000"}
+        with patch.dict(os.environ, env, clear=True):
+            configure_mlflow("eval")
+        mock_mlflow.set_tracking_uri.assert_called_once_with(
+            "http://localhost:5000"
+        )
+
+# ===========================================================================
+# Tests — evaluate.py: build_mlflow_tags
+# ===========================================================================
+
+class TestBuildMlflowTags:
+    """Tests for build_mlflow_tags."""
+
+    def test_filters_empty_values(self) -> None:
+        from ml_pipeline.src.mlflow_utils import build_mlflow_tags
+
+        with patch.dict(os.environ, {}, clear=True):
+            tags = build_mlflow_tags(
+                "eval",
+                models_dir="/m",
+                processed_dir="/p",
+                evaluation_dir="/e",
+            )
+        # Empty env vars should be filtered out
+        assert "pipeline.stage" in tags
+        assert tags["pipeline.stage"] == "eval"
+        assert all(v for v in tags.values())
+
+    def test_includes_manual_source(self) -> None:
+        from ml_pipeline.src.mlflow_utils import build_mlflow_tags
+
+        env = {"PIPELINE_SOURCE": "airflow"}
+        with patch.dict(os.environ, env, clear=True):
+            tags = build_mlflow_tags(
+                "train",
+                models_dir="/models",
+                processed_dir="/proc",
+                evaluation_dir="/eval",
+            )
+        assert tags["pipeline.source"] == "airflow"
+
+# ===========================================================================
+# Tests — evaluate.py: evaluate_threshold
+# ===========================================================================
+
+class TestEvaluateThreshold:
+    """Tests for evaluate_threshold."""
+
+    def test_returns_required_keys(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=0.10, max_threshold=0.90,
+        )
+        for key in ("threshold", "precision", "recall",
+                     "f1", "pr_auc", "roc_auc", "confusion_matrix"):
+            assert key in result, f"Missing key: {key}"
+
+    def test_metrics_in_valid_range(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=0.10, max_threshold=0.90,
+        )
+        assert 0.0 <= result["threshold"] <= 1.0
+        assert 0.0 <= result["precision"] <= 1.0
+        assert 0.0 <= result["recall"] <= 1.0
+        assert 0.0 <= result["f1"] <= 1.0
+
+    def test_with_output_dir(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        tmp_path: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=0.10, max_threshold=0.90,
+            output_dir=tmp_path,
+        )
+        assert (tmp_path / "pr_curve.png").exists()
+        assert result["threshold"] > 0
+
+    def test_relaxed_recall(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_threshold
+
+        # min_recall=1.0 may force relaxation
+        result = evaluate_threshold(
+            trained_model, X_test, y_test,
+            min_recall=1.0, max_threshold=0.01,
+        )
+        assert "threshold" in result
+
+# ===========================================================================
+# Tests — evaluate.py: evaluate_segments
+# ===========================================================================
+
+class TestEvaluateSegments:
+    """Tests for evaluate_segments."""
+
+    def test_returns_all_segment_and_overall(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        test_df: pd.DataFrame,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_segments
+
+        report = evaluate_segments(
+            trained_model, X_test, y_test,
+            test_df, threshold=0.5,
+        )
+        assert isinstance(report, pd.DataFrame)
+        assert "ALL" in report["segment"].values
+
+    def test_missing_segment_col(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        test_df: pd.DataFrame,
+    ) -> None:
+        from ml_pipeline.src.evaluate import evaluate_segments
+
+        df_no_seg = test_df.drop(
+            columns=["segment_encoded"], errors="ignore"
+        )
+        report = evaluate_segments(
+            trained_model, X_test, y_test,
+            df_no_seg, threshold=0.5,
+            segment_col="nonexistent_col",
+        )
+        # Should return only the ALL row
+        assert len(report) == 1
+        assert report.iloc[0]["segment"] == "ALL"
+
+# ===========================================================================
+# Tests — inference.py: predict_single
+# ===========================================================================
+
+class TestPredictSingle:
+    """Tests for FraudDetector.predict_single."""
+
+    def test_returns_required_keys(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        row = test_df.iloc[0].to_dict()
+        result = detector.predict_single(row)
+        for key in ("transaction_id", "fraud_score",
+                     "is_fraud_pred", "threshold", "risk_level"):
+            assert key in result
+
+    def test_score_in_unit_interval(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        row = test_df.iloc[0].to_dict()
+        result = detector.predict_single(row)
+        assert 0.0 <= result["fraud_score"] <= 1.0
+
+    def test_risk_level_is_valid(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        row = test_df.iloc[0].to_dict()
+        result = detector.predict_single(row)
+        assert result["risk_level"] in ("LOW", "MEDIUM", "HIGH")
+
+# ===========================================================================
+# Tests — inference.py: predict_batch (extended)
+# ===========================================================================
+
+class TestPredictBatchExtended:
+    """Extended tests for FraudDetector.predict_batch."""
+
+    def test_empty_raises(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            detector.predict_batch(pd.DataFrame())
+
+    def test_output_has_risk_level(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        result = detector.predict_batch(test_df.head(5))
+        assert "risk_level" in result.columns
+        assert set(result["risk_level"].unique()).issubset(
+            {"LOW", "MEDIUM", "HIGH"}
+        )
+
+    def test_is_fraud_pred_binary(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        result = detector.predict_batch(test_df.head(5))
+        assert set(result["is_fraud_pred"].unique()).issubset({0, 1})
+
+# ===========================================================================
+# Tests — inference.py: _risk_level
+# ===========================================================================
+
+class TestRiskLevel:
+    """Tests for FraudDetector._risk_level."""
+
+    def test_low(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        assert detector._risk_level(0.1) == "LOW"
+
+    def test_medium(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        assert detector._risk_level(0.5) == "MEDIUM"
+
+    def test_high(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+    ) -> None:
+        assert detector._risk_level(0.9) == "HIGH"
+
+# ===========================================================================
+# Tests — evaluate.py: load_artifacts
+# ===========================================================================
+
+class TestLoadArtifacts:
+    """Tests for load_artifacts."""
+
+    def test_loads_successfully(
+        self,
+        artifact_dir: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import load_artifacts
+
+        model, X_test, y_test, feat_cols, baseline = load_artifacts(
+            str(artifact_dir), str(artifact_dir / "processed"),
+        )
+        assert hasattr(model, "predict_proba")
+        assert isinstance(X_test, pd.DataFrame)
+        assert len(X_test) == len(y_test)
+        assert isinstance(feat_cols, list)
+        assert len(feat_cols) > 0
+        assert isinstance(baseline, dict)
+
+    def test_missing_model_raises(
+        self, tmp_path: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import load_artifacts
+
+        with pytest.raises(FileNotFoundError, match="model"):
+            load_artifacts(str(tmp_path), str(tmp_path))
+
+    def test_missing_features_raises(
+        self,
+        artifact_dir: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import load_artifacts
+
+        # Remove a feature from features.json to cause mismatch
+        feat_path = artifact_dir / "processed" / "features.json"
+        with open(feat_path) as fh:
+            meta = json.load(fh)
+        meta["features"].append("nonexistent_column_xyz")
+        with open(feat_path, "w") as fh:
+            json.dump(meta, fh)
+
+        with pytest.raises(ValueError, match="missing"):
+            load_artifacts(
+                str(artifact_dir),
+                str(artifact_dir / "processed"),
+            )
+
+# ===========================================================================
+# Tests — evaluate.py: save_evaluation_report
+# ===========================================================================
+
+class TestSaveEvaluationReport:
+    """Tests for save_evaluation_report."""
+
+    def test_creates_files(self, tmp_path: Path) -> None:
+        from ml_pipeline.src.evaluate import save_evaluation_report
+
+        metrics = {
+            "threshold": 0.35, "precision": 0.6,
+            "recall": 0.5, "f1": 0.55,
+            "pr_auc": 0.60, "roc_auc": 0.85,
+        }
+        comparison = {"status": "PASS", "metrics": {}}
+        seg_df = pd.DataFrame([{
+            "segment": "ALL", "n_samples": 100,
+            "n_fraud": 5, "fraud_rate": 5.0,
+            "precision": 0.8, "recall": 0.6,
+            "f1": 0.69, "pr_auc": 0.7,
+        }])
+
+        save_evaluation_report(
+            metrics, seg_df, comparison,
+            str(tmp_path),
+        )
+        assert (tmp_path / "evaluation.json").exists()
+        assert (tmp_path / "segment_report.csv").exists()
+
+        with open(tmp_path / "evaluation.json") as fh:
+            report = json.load(fh)
+        assert report["overall_status"] == "PASS"
+
+
+# ===========================================================================
+# Tests — evaluate.py: explain_shap
+# ===========================================================================
+
+class TestExplainShap:
+    """Tests for explain_shap."""
+
+    def test_creates_shap_plots(
+        self,
+        trained_model: XGBClassifier,
+        X_test: pd.DataFrame,
+        tmp_path: Path,
+    ) -> None:
+        from ml_pipeline.src.evaluate import explain_shap
+
+        explain_shap(
+            trained_model, X_test,
+            X_test.columns.tolist(),
+            output_dir=tmp_path,
+            sample_size=20,
+        )
+        assert (tmp_path / "shap_summary.png").exists()
+        assert (tmp_path / "shap_waterfall.png").exists()
+
+# ===========================================================================
+# Tests — inference.py: _transform edge cases
+# ===========================================================================
+
+class TestTransformEdgeCases:
+    """Tests for _transform edge-case paths."""
+
+    def test_timestamp_string_coercion(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        # Convert timestamp to string to trigger coercion
+        sample["timestamp"] = sample["timestamp"].astype(str)
+        transformed = detector._transform(sample)
+        assert "transaction_hour" in transformed.columns
+
+    def test_no_customer_id(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        sample = sample.drop(columns=["customer_id"])
+        transformed = detector._transform(sample)
+        assert "customer_tx_count" in transformed.columns
+        assert (transformed["customer_tx_count"] == 0).all()
+
+    def test_amount_string_coercion(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        sample["amount"] = sample["amount"].astype(str)
+        transformed = detector._transform(sample)
+        assert "amount_log" in transformed.columns
+
+    def test_hour_of_day_rename(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        sample = test_df.head(3).copy()
+        if "transaction_hour" in sample.columns:
+            sample = sample.rename(
+                columns={"transaction_hour": "hour_of_day"}
+            )
+        transformed = detector._transform(sample)
+        assert "transaction_hour" in transformed.columns
+        assert "hour_of_day" not in transformed.columns
+
+    def test_categorical_encoding(
+        self,
+        artifact_dir: Path,
+        test_df: pd.DataFrame,
+    ) -> None:
+        """Covers _transform lines 407-414."""
+        from ml_pipeline.src.inference import FraudDetector
+
+        # Write a non-empty categorical_maps so the loop executes
+        cat_maps = {"currency": {"VND": 0, "USD": 1}}
+        proc = artifact_dir / "processed"
+        with open(proc / "categorical_maps.json", "w") as fh:
+            json.dump(cat_maps, fh)
+
+        det = FraudDetector(
+            str(artifact_dir),
+            str(proc),
+        )
+        sample = test_df.head(3).copy()
+        # Give currency string values matching the map
+        sample["currency"] = "VND"
+        transformed = det._transform(sample)
+        assert (transformed["currency"] == 0).all()
+
+    def test_high_cardinality_drop(
+        self,
+        detector: "FraudDetector",  # noqa: F821
+        test_df: pd.DataFrame,
+    ) -> None:
+        """Covers _transform lines 416-419."""
+        sample = test_df.head(3).copy()
+        sample["merchant_name"] = "SomeShop"
+        sample["merchant_city"] = "Hanoi"
+        transformed = detector._transform(sample)
+        assert "merchant_name" not in transformed.columns
+        assert "merchant_city" not in transformed.columns
+
+    def test_score_fills_missing_features(
+        self,
+        artifact_dir: Path,
+        test_df: pd.DataFrame,
+    ) -> None:
+        """Covers _score lines 436-442."""
+        from ml_pipeline.src.inference import FraudDetector
+
+        proc = artifact_dir / "processed"
+        # Add a fake extra feature to features.json
+        feat_path = proc / "features.json"
+        with open(feat_path) as fh:
+            meta = json.load(fh)
+        meta["features"].append("invented_feat_xyz")
+        with open(feat_path, "w") as fh:
+            json.dump(meta, fh)
+
+        det = FraudDetector(str(artifact_dir), str(proc))
+        # Mock predict_proba to avoid XGBoost feature mismatch
+        dummy = np.array([[0.8, 0.2], [0.7, 0.3], [0.6, 0.4]])
+        with patch.object(
+            det._model, "predict_proba",
+            return_value=dummy,
+        ):
+            scores = det._score(test_df.head(3).copy())
+        assert len(scores) == 3
+        assert all(0.0 <= s <= 1.0 for s in scores)
+
+# ===========================================================================
+# Tests — train.py: configure_mlflow (covers lines 79, 89)
+# ===========================================================================
+
+class TestTrainConfigureMlflow:
+    """Tests for train.configure_mlflow (imported from mlflow_utils)."""
+
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
+    def test_tracking_uri(
+        self, mock_mlflow: MagicMock,
+    ) -> None:
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
+
+        env = {"MLFLOW_TRACKING_URI": "http://mlflow:5000"}
+        with patch.dict(os.environ, env, clear=True):
+            configure_mlflow("train")
+        mock_mlflow.set_tracking_uri.assert_called_once_with(
+            "http://mlflow:5000"
+        )
+
+    @patch("ml_pipeline.src.mlflow_utils.mlflow")
+    def test_custom_run_name(
+        self, mock_mlflow: MagicMock,
+    ) -> None:
+        from ml_pipeline.src.mlflow_utils import configure_mlflow
+
+        env = {"MLFLOW_RUN_NAME": "custom-run"}
+        with patch.dict(os.environ, env, clear=True):
+            name = configure_mlflow("train")
+        assert name == "custom-run"
