@@ -19,18 +19,15 @@ from typing import Any, Callable
 import httpx
 from dotenv import load_dotenv
 
-from ml_pipeline.src.evaluate import run_evaluation
 from ml_pipeline.src.model_registry import (
     find_latest_version_by_stage,
     transition_model_version_stage,
 )
-from ml_pipeline.src.preprocess import run_preprocessing
 from ml_pipeline.src.registry_metadata import (
     REGISTRY_METADATA_FILENAME,
     read_registry_metadata,
 )
 from ml_pipeline.src.runtime_bundle import PROCESSED_RUNTIME_FILES
-from ml_pipeline.src.train import run_training
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(REPO_ROOT / ".env", override=False)
@@ -54,6 +51,33 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _run_preprocessing(*, data_path: str, output_dir: str) -> None:
+    from ml_pipeline.src.preprocess import run_preprocessing
+
+    run_preprocessing(data_path=data_path, output_dir=output_dir)
+
+
+def _run_training(*, processed_dir: str, models_dir: str) -> dict[str, Any]:
+    from ml_pipeline.src.train import run_training
+
+    return run_training(processed_dir=processed_dir, models_dir=models_dir)
+
+
+def _run_evaluation(
+    *,
+    models_dir: str,
+    processed_dir: str,
+    evaluation_dir: str,
+) -> dict[str, Any]:
+    from ml_pipeline.src.evaluate import run_evaluation
+
+    return run_evaluation(
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        evaluation_dir=evaluation_dir,
+    )
 
 LOADBALANCER_URL = os.getenv("SIMULATOR_TARGET_URL", "http://127.0.0.1:8000").rstrip("/")
 STABLE_URL = os.getenv("SIMULATOR_STABLE_URL", "http://127.0.0.1:8002").rstrip("/")
@@ -710,39 +734,62 @@ def log_rollout_state() -> None:
 
 def baseline_payload(index: int) -> dict[str, Any]:
     timestamp = datetime.now(tz=timezone.utc) - timedelta(minutes=index % 180)
-    amount = max(50_000, int(random.gauss(400_000, 180_000)))
+    amount = max(180_000, int(random.gauss(250_000, 35_000)))
+    avg_amount_last_30d = max(260_000, int(random.gauss(360_000, 40_000)))
+    amount_ratio_vs_avg = round(
+        min(0.9, max(0.55, amount / max(avg_amount_last_30d, 1))),
+        3,
+    )
     return {
         "transaction_id": _random_id("TX"),
         "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "customer_id": _random_id("CUST"),
         "amount": amount,
-        "customer_tier": random.choice(["MASS", "PRIORITY", "PRIVATE", "INSPIRE"]),
-        "card_type": random.choice(["VISA", "MASTERCARD"]),
-        "card_tier": random.choice(["STANDARD", "GOLD", "PLATINUM"]),
+        "customer_tier": random.choices(
+            ["PRIORITY", "PRIVATE"],
+            weights=[0.8, 0.2],
+            k=1,
+        )[0],
+        "card_type": "VISA",
+        "card_tier": random.choices(
+            ["GOLD", "PLATINUM"],
+            weights=[0.8, 0.2],
+            k=1,
+        )[0],
         "currency": "VND",
-        "merchant_name": random.choice(["Grab", "Shopee", "Tiki", "CircleK"]),
-        "mcc_code": random.choice([4121, 5812, 5411, 5732]),
-        "merchant_category": random.choice(
-            ["Transport", "Food", "Retail", "Electronics"]
-        ),
-        "merchant_city": random.choice(["Ha Noi", "Ho Chi Minh", "Da Nang"]),
+        "merchant_name": random.choice(["Tiki", "Shopee"]),
+        "mcc_code": random.choice([5732, 5732, 5812]),
+        "merchant_category": random.choices(
+            ["Electronics", "Retail"],
+            weights=[0.65, 0.35],
+            k=1,
+        )[0],
+        "merchant_city": random.choice(["Ha Noi", "Ho Chi Minh"]),
         "merchant_country": "VN",
-        "device_type": random.choice(["Mobile", "Desktop"]),
-        "os": random.choice(["iOS", "Android", "Windows"]),
+        "device_type": random.choices(
+            ["Desktop", "Mobile"],
+            weights=[0.8, 0.2],
+            k=1,
+        )[0],
+        "os": random.choices(
+            ["Windows", "iOS"],
+            weights=[0.85, 0.15],
+            k=1,
+        )[0],
         "ip_country": "VN",
-        "distance_from_home_km": round(abs(random.gauss(3.0, 2.0)), 2),
+        "distance_from_home_km": round(abs(random.gauss(2.8, 0.8)), 2),
         "cvv_match": "Y",
-        "is_3d_secure": random.choice(["Y", "N"]),
+        "is_3d_secure": "Y",
         "transaction_status": "APPROVED",
-        "tx_count_last_1h": max(0, int(random.gauss(2, 1))),
-        "tx_count_last_24h": max(1, int(random.gauss(5, 3))),
-        "time_since_last_tx_min": round(abs(random.gauss(90.0, 40.0)), 2),
-        "avg_amount_last_30d": max(50_000, int(random.gauss(450_000, 120_000))),
-        "amount_ratio_vs_avg": round(max(0.05, random.gauss(0.95, 0.25)), 3),
+        "tx_count_last_1h": max(0, int(random.gauss(1.5, 0.5))),
+        "tx_count_last_24h": max(2, int(random.gauss(4, 1))),
+        "time_since_last_tx_min": round(abs(random.gauss(100.0, 20.0)), 2),
+        "avg_amount_last_30d": avg_amount_last_30d,
+        "amount_ratio_vs_avg": amount_ratio_vs_avg,
         "is_new_device": 0,
         "is_new_merchant": 0,
         "card_bin": 411111,
-        "account_age_days": max(30, int(random.gauss(700, 180))),
+        "account_age_days": max(500, int(random.gauss(1050, 120))),
         "is_weekend": 1 if timestamp.weekday() >= 5 else 0,
         "hour_of_day": timestamp.hour,
     }
@@ -750,27 +797,52 @@ def baseline_payload(index: int) -> dict[str, Any]:
 
 def drift_payload(index: int) -> dict[str, Any]:
     payload = baseline_payload(index)
+    amount = max(320_000, int(random.gauss(700_000, 150_000)))
+    avg_amount_last_30d = max(
+        260_000,
+        int(payload["avg_amount_last_30d"] * random.uniform(0.9, 1.0)),
+    )
     payload.update(
         {
-            "amount": max(500_000, int(random.gauss(5_500_000, 1_250_000))),
-            "merchant_country": random.choice(["SG", "US", "JP"]),
-            "ip_country": random.choice(["SG", "US", "JP"]),
-            "device_type": random.choice(["Tablet", "Desktop"]),
-            "os": random.choice(["Linux", "HarmonyOS", "Android"]),
-            "distance_from_home_km": round(abs(random.gauss(120.0, 35.0)), 2),
-            "tx_count_last_1h": random.randint(8, 24),
-            "tx_count_last_24h": random.randint(20, 80),
-            "time_since_last_tx_min": round(random.uniform(0.0, 8.0), 2),
-            "amount_ratio_vs_avg": round(random.uniform(4.5, 12.0), 3),
-            "is_new_device": 1,
-            "is_new_merchant": 1,
-            "hour_of_day": random.choice([0, 1, 2, 3, 4, 23]),
+            "amount": amount,
+            "merchant_country": random.choices(
+                ["SG", "US", "VN"],
+                weights=[0.5, 0.25, 0.25],
+                k=1,
+            )[0],
+            "ip_country": random.choices(
+                ["SG", "US", "VN"],
+                weights=[0.5, 0.25, 0.25],
+                k=1,
+            )[0],
+            "device_type": random.choices(
+                ["Desktop", "POS", "Mobile"],
+                weights=[0.35, 0.45, 0.2],
+                k=1,
+            )[0],
+            "os": random.choices(
+                ["Windows", "Android", "iOS"],
+                weights=[0.45, 0.4, 0.15],
+                k=1,
+            )[0],
+            "distance_from_home_km": round(abs(random.gauss(12.0, 4.0)), 2),
+            "tx_count_last_1h": random.randint(2, 5),
+            "tx_count_last_24h": random.randint(6, 12),
+            "time_since_last_tx_min": round(random.uniform(18.0, 55.0), 2),
+            "amount_ratio_vs_avg": round(
+                min(2.2, max(1.0, amount / max(avg_amount_last_30d, 1))),
+                3,
+            ),
+            "is_new_device": 1 if random.random() < 0.12 else 0,
+            "is_new_merchant": 1 if random.random() < 0.12 else 0,
+            "hour_of_day": random.choice([0, 1, 22, 23]),
             "merchant_name": random.choice(
-                ["UnknownMerchant", "CryptoExpress", "ForeignCasino"]
+                ["Tiki", "Shopee", "TravelNow"]
             ),
             "merchant_category": random.choice(
-                ["Gaming", "Crypto", "Travel", "HighRiskRetail"]
+                ["Travel", "Electronics", "Retail"]
             ),
+            "avg_amount_last_30d": avg_amount_last_30d,
         }
     )
     return payload
@@ -778,9 +850,13 @@ def drift_payload(index: int) -> dict[str, Any]:
 
 def post_retrain_payload(index: int) -> dict[str, Any]:
     payload = baseline_payload(index)
-    payload["amount"] = max(100_000, int(random.gauss(750_000, 250_000)))
+    payload["amount"] = max(220_000, int(random.gauss(320_000, 55_000)))
     payload["merchant_country"] = random.choice(["VN", "SG"])
     payload["ip_country"] = random.choice(["VN", "SG"])
+    payload["amount_ratio_vs_avg"] = round(
+        min(1.05, max(0.7, payload["amount"] / max(payload["avg_amount_last_30d"], 1))),
+        3,
+    )
     return payload
 
 
@@ -1010,7 +1086,7 @@ def ensure_processed_training_artifacts(
             "Processed training artifacts missing. Running preprocessing from %s",
             raw_dataset_path,
         )
-        run_preprocessing(
+        _run_preprocessing(
             data_path=str(raw_dataset_path),
             output_dir=str(processed_dir),
         )
@@ -1040,11 +1116,11 @@ def train_candidate_model(
     version_dir = VERSIONS_DIR / resolved_model_id
     version_dir.mkdir(parents=True, exist_ok=True)
 
-    training_metrics = run_training(
+    training_metrics = _run_training(
         processed_dir=str(processed_dir),
         models_dir=str(version_dir),
     )
-    evaluation = run_evaluation(
+    evaluation = _run_evaluation(
         models_dir=str(version_dir),
         processed_dir=str(processed_dir),
         evaluation_dir=str(version_dir / EVALUATION_DIRNAME),
